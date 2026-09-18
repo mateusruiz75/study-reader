@@ -309,20 +309,20 @@ describe("phase 2C: ordering and balanced selection", () => {
 		]);
 	});
 
-	it("enforces max-per-materia without skipping lower-priority materias", () => {
+	it("enforces max-per-materia on lower bands without skipping lower-priority materias", () => {
 		const { selected, rejected } = selectBalanced(prioritized(), { limit: 4, maxPerMateria: 1 });
 
 		expect(selected.map((p) => [p.event.questionId, p.event.materia])).toEqual([
 			["q-many-recent", MAT.trib],
+			["q-relapse", MAT.trib],
 			["q-recurrent", MAT.cont],
 			["q-isolated-recent", MAT.const],
 		]);
-		expect(rejected.find((p) => p.event.questionId === "q-relapse")!.rejectedBecause).toBe(
-			"max-per-materia",
-		);
-		expect(rejected.find((p) => p.event.questionId === "q-recovered")!.rejectedBecause).toBe(
-			"max-per-materia",
-		);
+		expect(rejected.map((p) => [p.event.questionId, p.rejectedBecause])).toEqual([
+			["q-unknown", "max-per-materia"],
+			["q-isolated-old", "max-per-materia"],
+			["q-recovered", "max-per-materia"],
+		]);
 	});
 
 	it("uses profile boosts only as a tie-break inside the same band", () => {
@@ -433,5 +433,117 @@ describe("phase 2C: prioritized review course", () => {
 		expect(lessonContent["content/error-q-relapse.md"]).toContain("### Prioridade");
 		expect(lessonContent["content/error-q-relapse.md"]).toContain("**CRITICAL**");
 		expect(lessonContent["content/error-q-relapse.md"]).toContain("- 2 erros registrados");
+	});
+});
+
+describe("phase 2C.1: critical band invariant", () => {
+	function bandLedger() {
+		seq = 0;
+		const relapse = (id: string, materia: string, lastDays: number) => [
+			error(id, materia, daysAgo(lastDays + 10)),
+			correct(id, materia, daysAgo(lastDays + 5)),
+			error(id, materia, daysAgo(lastDays), "C"),
+		];
+		const recurrent = (id: string, materia: string, lastDays: number) => [
+			error(id, materia, daysAgo(lastDays + 4)),
+			error(id, materia, daysAgo(lastDays)),
+		];
+		return [
+			...relapse("q-a1", MAT.trib, 1),
+			...relapse("q-a2", MAT.trib, 2),
+			...relapse("q-a3", MAT.trib, 3),
+			...relapse("q-b1", MAT.cont, 4),
+			...recurrent("q-c1", MAT.const, 1),
+			...recurrent("q-a4", MAT.trib, 2),
+			error("q-c2", MAT.const, daysAgo(1)),
+		];
+	}
+
+	const prioritized = (raw = bandLedger()) => {
+		const adapted = adaptLedger(raw);
+		return prioritizeEvents(adapted.events, deriveFeatures(adapted.attempts, AS_OF));
+	};
+
+	const ids = (items: { event: { questionId: string | null } }[]) => items.map((i) => i.event.questionId);
+
+	it("classifies the fixture as expected", () => {
+		expect(prioritized().map((p) => [p.event.questionId, p.priority])).toEqual([
+			["q-a1", "CRITICAL"],
+			["q-a2", "CRITICAL"],
+			["q-a3", "CRITICAL"],
+			["q-b1", "CRITICAL"],
+			["q-c1", "HIGH"],
+			["q-a4", "HIGH"],
+			["q-c2", "MEDIUM"],
+		]);
+	});
+
+	it("never drops a CRITICAL for a lower band because of max-per-materia", () => {
+		const { selected, rejected } = selectBalanced(prioritized(), { limit: 6, maxPerMateria: 2 });
+
+		expect(ids(selected)).toEqual(["q-a1", "q-a2", "q-a3", "q-b1", "q-c1", "q-c2"]);
+		expect(rejected.map((r) => [r.event.questionId, r.rejectedBecause])).toEqual([
+			["q-a4", "max-per-materia"],
+		]);
+	});
+
+	it("includes every CRITICAL when they fit in the limit even if a materia exceeds its cap", () => {
+		const { selected } = selectBalanced(prioritized(), { limit: 4, maxPerMateria: 1 });
+
+		expect(ids(selected)).toEqual(["q-a1", "q-a2", "q-a3", "q-b1"]);
+		expect(selected.every((p) => p.priority === "CRITICAL")).toBe(true);
+	});
+
+	it("keeps applying max-per-materia to lower bands after the CRITICAL block", () => {
+		const { selected, rejected } = selectBalanced(prioritized(), { limit: 10, maxPerMateria: 1 });
+
+		expect(ids(selected)).toEqual(["q-a1", "q-a2", "q-a3", "q-b1", "q-c1"]);
+		expect(rejected.map((r) => [r.event.questionId, r.rejectedBecause])).toEqual([
+			["q-a4", "max-per-materia"],
+			["q-c2", "max-per-materia"],
+		]);
+	});
+
+	it("never includes HIGH when the limit is smaller than the number of CRITICAL", () => {
+		const { selected, rejected } = selectBalanced(prioritized(), { limit: 2, maxPerMateria: 6 });
+
+		expect(ids(selected)).toEqual(["q-a1", "q-a2"]);
+		expect(selected.every((p) => p.priority === "CRITICAL")).toBe(true);
+		expect(rejected.map((r) => [r.event.questionId, r.rejectedBecause])).toEqual([
+			["q-a3", "limit"],
+			["q-b1", "limit"],
+			["q-c1", "limit"],
+			["q-a4", "limit"],
+			["q-c2", "limit"],
+		]);
+	});
+
+	it("uses max-per-materia only to balance among CRITICAL when they exceed the limit", () => {
+		const balanced = selectBalanced(prioritized(), { limit: 2, maxPerMateria: 1 });
+		const refilled = selectBalanced(prioritized(), { limit: 3, maxPerMateria: 1 });
+
+		expect(ids(balanced.selected)).toEqual(["q-a1", "q-b1"]);
+		expect(ids(refilled.selected)).toEqual(["q-a1", "q-a2", "q-b1"]);
+		expect(ids(refilled.rejected)).toEqual(["q-a3", "q-c1", "q-a4", "q-c2"]);
+		expect(refilled.selected.every((p) => p.priority === "CRITICAL")).toBe(true);
+	});
+
+	it("is deterministic and independent of input order", () => {
+		const a = selectBalanced(prioritized(), { limit: 5, maxPerMateria: 1 });
+		const b = selectBalanced(prioritized([...bandLedger()].reverse()), { limit: 5, maxPerMateria: 1 });
+
+		expect(ids(b.selected)).toEqual(ids(a.selected));
+		expect(b.rejected.map((r) => r.rejectedBecause)).toEqual(a.rejected.map((r) => r.rejectedBecause));
+	});
+
+	it("keeps ids stable regardless of the selection rule", () => {
+		const course = buildReviewCourse(selectBalanced(prioritized(), { limit: 6, maxPerMateria: 2 }).selected);
+		const plain = buildReviewCourse(adaptLedger(bandLedger()).events);
+		const lessonIds = (c: typeof course) =>
+			c.manifest.modules.flatMap((m) => m.lessons.map((l) => l.id)).sort();
+
+		for (const id of lessonIds(course)) expect(lessonIds(plain)).toContain(id);
+		expect(Object.keys(course.questions!).sort()).toContain("q-a3-recovery");
+		expect(course.flashcards!.map((c) => c.id)).toContain("q-a3-card");
 	});
 });

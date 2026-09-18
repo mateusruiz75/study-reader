@@ -482,10 +482,22 @@ Ordem total, determinística: banda → boost → `errorCount` desc →
 `errorsAfterCorrect` desc → `correctAfterLastError` asc → `lastErrorAt` desc →
 `questionId`.
 
-`selectBalanced(items, { limit, maxPerMateria })` percorre a lista ordenada e
-aceita o item se a matéria ainda tem vaga e o total ainda cabe; caso contrário
-registra `rejectedBecause: "max-per-materia" | "limit"`. Uma matéria grande
-não ocupa o livro inteiro, mas a prioridade global continua mandando.
+`selectBalanced(items, { limit, maxPerMateria })` respeita o invariante
+**CRITICAL sempre precede HIGH/MEDIUM/LOW**; `max-per-materia` nunca tira a
+vaga de um CRITICAL para uma banda inferior:
+
+1. Se `#CRITICAL <= limit`: todos os CRITICAL entram, mesmo que uma matéria
+   ultrapasse a cota. As vagas restantes são preenchidas em ordem
+   (HIGH → MEDIUM → LOW) aplicando `max-per-materia` normalmente — a cota conta
+   os CRITICAL já incluídos, então uma matéria que estourou por CRITICAL não
+   recebe banda inferior.
+2. Se `#CRITICAL > limit`: só CRITICAL entram. A cota atua apenas como
+   balanceamento entre eles (primeira passada respeitando a cota, segunda
+   passada preenchendo o restante na ordem determinística); nenhuma banda
+   inferior entra.
+
+Cada rejeição registra `rejectedBecause: "max-per-materia" | "limit"`. A lista
+`selected` mantém a ordem global de prioridade.
 
 ### Curso
 

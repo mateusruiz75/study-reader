@@ -257,19 +257,39 @@ export function prioritizeEvents(
 }
 
 export function selectBalanced(items: PrioritizedError[], options: SelectionOptions): Selection {
+	const critical = items.filter((item) => item.priority === "CRITICAL");
+	const lower = items.filter((item) => item.priority !== "CRITICAL");
 	const selected: PrioritizedError[] = [];
 	const rejected: RejectedError[] = [];
 	const perMateria = new Map<string, number>();
-	for (const item of items) {
-		const count = perMateria.get(item.event.materia) ?? 0;
-		if (count >= options.maxPerMateria) {
-			rejected.push({ ...item, rejectedBecause: "max-per-materia" });
-		} else if (selected.length >= options.limit) {
-			rejected.push({ ...item, rejectedBecause: "limit" });
-		} else {
-			selected.push(item);
-			perMateria.set(item.event.materia, count + 1);
+	const take = (item: PrioritizedError) => {
+		selected.push(item);
+		perMateria.set(item.event.materia, (perMateria.get(item.event.materia) ?? 0) + 1);
+	};
+	const underCap = (item: PrioritizedError) =>
+		(perMateria.get(item.event.materia) ?? 0) < options.maxPerMateria;
+
+	if (critical.length <= options.limit) {
+		for (const item of critical) take(item);
+		for (const item of lower) {
+			if (!underCap(item)) rejected.push({ ...item, rejectedBecause: "max-per-materia" });
+			else if (selected.length >= options.limit) rejected.push({ ...item, rejectedBecause: "limit" });
+			else take(item);
 		}
+		return { selected, rejected };
 	}
+
+	const overflow: PrioritizedError[] = [];
+	for (const item of critical) {
+		if (selected.length < options.limit && underCap(item)) take(item);
+		else overflow.push(item);
+	}
+	for (const item of overflow) {
+		if (selected.length < options.limit) take(item);
+		else rejected.push({ ...item, rejectedBecause: "limit" });
+	}
+	for (const item of lower) rejected.push({ ...item, rejectedBecause: "limit" });
+	selected.sort((a, b) => items.indexOf(a) - items.indexOf(b));
+	rejected.sort((a, b) => items.indexOf(a) - items.indexOf(b));
 	return { selected, rejected };
 }
