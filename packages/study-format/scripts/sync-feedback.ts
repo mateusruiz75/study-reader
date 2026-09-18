@@ -1,7 +1,7 @@
 import { strToU8 } from "fflate";
 import { createHash } from "node:crypto";
 import { REVIEW_COURSE_ID } from "./review-course.ts";
-import type { AdbResult, AdbRunner } from "./deploy-review.ts";
+import { requireDevice, type AdbResult, type AdbRunner } from "./deploy-review.ts";
 
 export const REMOTE_FEEDBACK_DIR = `/sdcard/koreader/studyreader/data/${REVIEW_COURSE_ID}`;
 export const FEEDBACK_FILES = ["progress.json", "answers.json", "reviews.json"] as const;
@@ -70,12 +70,7 @@ export async function syncFeedback(options: SyncOptions, io: SyncIO): Promise<Sy
 		return result;
 	};
 
-	const devices = must(await io.adb(["devices", "-l"]), "adb devices");
-	const connected = devices.stdout
-		.split("\n")
-		.map((line) => line.trim().split(/\s+/))
-		.some(([id, state]) => id === serial && state === "device");
-	if (!connected) throw new SyncError(`device ${serial} is not connected (or not authorized)`);
+	await requireDevice(io.adb, serial, (message) => new SyncError(message));
 
 	if ((await adb(["shell", "ls", "-d", REMOTE_FEEDBACK_DIR])).code !== 0) {
 		throw new SyncError(`remote feedback directory missing: ${REMOTE_FEEDBACK_DIR}`);

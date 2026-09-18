@@ -16,6 +16,7 @@
 		"study:build-review": "node packages/study-format/scripts/build-review.mts",
 		"study:deploy-review": "node packages/study-format/scripts/deploy-review.mts",
 		"study:sync-feedback": "node packages/study-format/scripts/sync-feedback.mts",
+		"study:refresh-review": "node packages/study-format/scripts/refresh-review.mts",
 		"plugin:deploy": "bash packages/koreader-plugin/deploy.sh",
 		"plugin:test": "cd packages/koreader-plugin && luajit tests/run.lua",
 		"plugin:check": "cd packages/koreader-plugin && luajit -e \"for _, f in ipairs({'_meta','main','md2xhtml','quiz','review','screens','srs','state','store'}) do assert(loadfile('plugin/studyreader.koplugin/' .. f .. '.lua'), f) end print('lua syntax OK')\"",

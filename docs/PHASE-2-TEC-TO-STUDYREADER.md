@@ -644,6 +644,53 @@ carrega o sinal e os campos usados; `phase` passa a `"2E"`.
 Feedback de questões fora das 30 atuais fica no store e volta a contar quando
 a questão disputar seleção.
 
+## PHASE 3 — Daily closed loop
+
+`pnpm study:refresh-review -- --serial <serial> [--dry-run] [--restart-koreader]`
+(`packages/study-format/scripts/refresh-review.mts`; orquestração pura e
+testável em `scripts/refresh-review.ts`, testes em `tests/refresh-review.test.ts`
+com adb e filesystem mockados). Env: `INDIO_LEDGER`, `INDIO_TABLET_SERIAL`,
+`ADB`. Flags: `--limit 30`, `--max-per-materia 6`, `--as-of ISO`,
+`--profile`, `--ledger`, `--adb`, `--output`.
+
+Só orquestra módulos existentes — `syncFeedback` (2E), `studyContextFromFiles`
++ `runReviewPipeline` + `buildStableStudy` (2C.1/2E), `validateReviewPackage`
++ `deployReview` (2D). Nenhuma lógica de prioridade, feedback ou deploy é
+duplicada.
+
+Ordem exata (cada passo é emitido via `onStep`):
+
+1. `validate-args` — serial e ledger obrigatórios, `limit`/`max-per-materia` > 0
+2. `lock` — `.indio-virtual/locks/refresh-review.lock` (`{ pid, startedAt }`).
+   Lock com menos de 6 h → `REFRESH ALREADY RUNNING`; mais velho é
+   considerado stale e substituído (`staleLockReplaced: true` no report).
+   Removido em sucesso e em erro.
+3. `validate-device` — `adb devices -l` precisa listar o serial em `device`
+   (modelo capturado para o report)
+4. `sync-feedback` — snapshot read-only com verificação de consistência
+   (1 retry, depois `STATE CHANGED DURING SNAPSHOT`)
+5. `load-ledger` — leitura + SHA-256; ausente ou inválido = abort
+6. `priority` — features do ledger + feedback 2E; bandas só do ledger
+7. `build` — bytes estáveis (mtime = `priorityAsOf`)
+8. `validate-package` — `readStudy`, cross references, `manifest.id`, nº de
+   aulas, ids duplicados
+9. `compare-and-deploy` — `deployReview`: SHA/conteúdo lógico → `NO CHANGE`
+   (sem backup, push, rename ou restart) ou backup → `.tmp` → SHA → `mv` →
+   `touch` → SHA final, com hashes do estado do aluno antes/depois
+10. `delta` — seleção anterior (pacote remoto puxado) × nova: `ENTERED`,
+    `LEFT`, `STAYED`, cada um com matéria, banda, study signal e motivo
+11. `report` — `.indio-virtual/daily-refresh/<runId>/report.{json,md}` e
+    `latest.json` (também em falha, com `result: FAILED` e `error`)
+12. `unlock`
+
+`--dry-run` executa 1–8 e a comparação, sem backup/push/rename/restart, e
+reporta `WOULD DEPLOY` ou `NO CHANGE`. `--restart-koreader` só reinicia após
+`DEPLOYED`; em `NO CHANGE` nada acontece. `result`: `NO_CHANGE`, `DEPLOYED`,
+`DRY_RUN` ou `FAILED`. Campos de conteúdo do report são determinísticos para o
+mesmo ledger + snapshot + `as-of`; só `runId`, timestamps e caminhos variam.
+
+Fora desta fase: cron/agendamento.
+
 ## Sequência das fases
 
 | Fase | Entrega |
@@ -653,3 +700,4 @@ a questão disputar seleção.
 | **2C** | Priorização determinística (bandas, recaída/recuperação, seleção balanceada) |
 | **2D** | Deploy seguro via `adb -s` (dry-run, backup, temp + rename, SHA-256, NO CHANGE) |
 | **2E** | Feedback do StudyReader (read-only) como desempate dentro da banda |
+| **3** | `study:refresh-review`: sync → prioridade → build → deploy seguro → report, com lock |

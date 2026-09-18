@@ -126,6 +126,25 @@ function backupStamp(now: Date): string {
 	return `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
 }
 
+export type ConnectedDevice = { serial: string; model: string | null };
+
+export async function requireDevice(
+	adb: AdbRunner,
+	serial: string,
+	fail: (message: string) => Error = (message) => new DeployError(message),
+): Promise<ConnectedDevice> {
+	const devices = await adb(["devices", "-l"]);
+	if (devices.code !== 0) throw fail(`adb devices failed: ${(devices.stderr || devices.stdout).trim()}`);
+	for (const line of devices.stdout.split("\n")) {
+		const [id, state, ...rest] = line.trim().split(/\s+/);
+		if (id === serial && state === "device") {
+			const model = rest.find((token) => token.startsWith("model:"))?.slice("model:".length) ?? null;
+			return { serial, model };
+		}
+	}
+	throw fail(`device ${serial} is not connected (or not authorized)`);
+}
+
 export async function deployReview(options: DeployOptions, io: DeployIO): Promise<DeployReport> {
 	const serial = options.serial?.trim();
 	if (!serial) throw new DeployError("an explicit --serial is required (never uses the default adb device)");
@@ -137,12 +156,7 @@ export async function deployReview(options: DeployOptions, io: DeployIO): Promis
 		return result;
 	};
 
-	const devices = must(await io.adb(["devices", "-l"]), "adb devices");
-	const connected = devices.stdout
-		.split("\n")
-		.map((line) => line.trim().split(/\s+/))
-		.some(([id, state]) => id === serial && state === "device");
-	if (!connected) throw new DeployError(`device ${serial} is not connected (or not authorized)`);
+	await requireDevice(io.adb, serial);
 
 	if ((await shell("ls", "-d", REMOTE_DIR)).code !== 0) {
 		throw new DeployError(`destination directory missing on device: ${REMOTE_DIR}`);
