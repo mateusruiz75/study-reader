@@ -183,6 +183,112 @@ function Present.lessonItem(lesson, completed, quiz, meta)
     }
 end
 
+local UPPER_ACCENTS = {
+    ["á"] = "Á", ["à"] = "À", ["â"] = "Â", ["ã"] = "Ã", ["é"] = "É", ["ê"] = "Ê", ["í"] = "Í",
+    ["ó"] = "Ó", ["ô"] = "Ô", ["õ"] = "Õ", ["ú"] = "Ú", ["ü"] = "Ü", ["ç"] = "Ç",
+}
+
+local function upper(text)
+    local result = tostring(text or ""):upper()
+    for lower_char, upper_char in pairs(UPPER_ACCENTS) do
+        result = result:gsub(lower_char, upper_char)
+    end
+    return result
+end
+
+Present.upper = upper
+
+local function badgesLine(meta)
+    if not meta then return nil end
+    local parts = {}
+    local priority = Present.priorityBadge(meta.priority)
+    if priority then parts[#parts + 1] = priority end
+    local signal = Present.signalBadge(meta.signal)
+    if signal then parts[#parts + 1] = signal end
+    return #parts > 0 and table.concat(parts, " ") or nil
+end
+
+Present.badgesLine = badgesLine
+
+function Present.moduleTitleForKey(course, key)
+    local manifest = course and course.manifest
+    for _, module in ipairs(manifest and manifest.modules or {}) do
+        for _, lesson in ipairs(module.lessons or {}) do
+            if Present.lessonKey(lesson) == key then return module.title, lesson end
+        end
+    end
+    return nil, nil
+end
+
+function Present.quizHeader(course, lesson, question_id, index, total)
+    local key = question_id and question_id:match("^(.+)%-recovery$") or nil
+    local materia = key and Present.moduleTitleForKey(course, key) or nil
+    local meta = key and Present.lessonMeta(course, { id = "error-" .. key }) or nil
+    local kicker
+    if materia then
+        kicker = upper(materia) .. (key and (" · Q" .. key) or "")
+    else
+        kicker = upper(lesson and lesson.title or "Quiz")
+    end
+    return {
+        kicker = kicker,
+        badges = badgesLine(meta),
+        counter = string.format("Questão %d / %d", index, total),
+    }
+end
+
+function Present.optionLabel(option, selected)
+    return string.format("%s %s) %s", selected and "☑" or "☐", option.id, option.text)
+end
+
+local function describeOptions(question, ids)
+    local parts = {}
+    for _, id in ipairs(ids) do
+        local text = id
+        for _, option in ipairs(question.options or {}) do
+            if option.id == id then
+                text = string.format("%s) %s", option.id, option.text)
+                break
+            end
+        end
+        parts[#parts + 1] = text
+    end
+    return table.concat(parts, "\n")
+end
+
+function Present.feedbackTexts(question, selected_ids, correct)
+    local texts = {
+        headline = correct and "✓ CORRETO" or "✗ INCORRETO",
+        explanation = question.explanation,
+    }
+    if not correct then
+        texts.marked = describeOptions(question, selected_ids or {})
+        texts.correct = describeOptions(question, question.correct or {})
+    end
+    return texts
+end
+
+function Present.summaryTexts(correct, total, lesson_done)
+    local pct = percent(correct, total)
+    return {
+        title = lesson_done and "REVISÃO CONCLUÍDA" or "QUIZ CONCLUÍDO",
+        score = string.format("%d / %d", correct, total),
+        percent = string.format("%d%%", pct),
+        status = lesson_done and "✓ Aula concluída" or nil,
+    }
+end
+
+function Present.cardMeta(course, card)
+    local key = card and card.id and card.id:match("^(.+)%-card$") or nil
+    local materia = key and Present.moduleTitleForKey(course, key) or nil
+    local meta = key and Present.lessonMeta(course, { id = "error-" .. key }) or nil
+    return { key = key, materia = materia, badges = badgesLine(meta) }
+end
+
+function Present.ratingLabels()
+    return { "Again", "Hard", "Good", "Easy" }
+end
+
 local function escape(text)
     return (tostring(text):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"))
 end

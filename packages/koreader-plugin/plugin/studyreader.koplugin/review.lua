@@ -8,7 +8,10 @@ local FocusManager = require("ui/widget/focusmanager")
 local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
+local HorizontalGroup = require("ui/widget/horizontalgroup")
+local HorizontalSpan = require("ui/widget/horizontalspan")
 local InfoMessage = require("ui/widget/infomessage")
+local LineWidget = require("ui/widget/linewidget")
 local Size = require("ui/size")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local TextWidget = require("ui/widget/textwidget")
@@ -18,6 +21,7 @@ local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local _ = require("gettext")
 
+local Present = require("present")
 local SRS = require("srs")
 local State = require("state")
 
@@ -90,6 +94,36 @@ function ReviewWidget:_populate()
         }
         return button
     end
+    local function addLabel(text)
+        addText(text, Font:getFace("smallinfofont"))
+    end
+    local function addDivider()
+        addSpan(Size.padding.default)
+        group[#group + 1] = LineWidget:new{
+            dimen = Geom:new{ w = width, h = Size.line.medium },
+            background = Blitbuffer.COLOR_DARK_GRAY,
+        }
+        addSpan(Size.padding.default)
+    end
+    local function addButtonRow(labels, on_press)
+        local gap = Size.padding.default
+        local button_w = math.floor((width - gap * (#labels - 1)) / #labels)
+        local row = HorizontalGroup:new{ align = "center" }
+        local focus_row = {}
+        for i, label in ipairs(labels) do
+            local button = Button:new{
+                text = label,
+                width = button_w,
+                callback = function() on_press(i) end,
+                show_parent = self,
+            }
+            focus_row[#focus_row + 1] = button
+            row[#row + 1] = button
+            if i < #labels then row[#row + 1] = HorizontalSpan:new{ width = gap } end
+        end
+        self.layout[#self.layout + 1] = focus_row
+        group[#group + 1] = row
+    end
 
     if #self.due == 0 then
         addText(_("Nothing to review"), Font:getFace("NotoSans-Bold.ttf", 26), true)
@@ -100,21 +134,32 @@ function ReviewWidget:_populate()
         addButton(_("Close"), function() self:onClose() end)
     else
         local card = self.due[self.index]
-        addText(string.format(_("Review %d / %d"), self.index, #self.due),
-            Font:getFace("smallinfofont"))
-        addSpan(PADDING)
-        addWrapped(card.front, Font:getFace("cfont", 26))
+        local info = Present.cardMeta(self.course, card)
+        if info.materia then
+            addLabel(Present.upper(info.materia) .. (info.key and (" · Q" .. info.key) or ""))
+        end
+        if info.badges then
+            addSpan(Size.padding.small)
+            addText(info.badges, Font:getFace("smallinfofont"), true)
+        end
+        addSpan(Size.padding.small)
+        addLabel(string.format(_("Flashcard %d / %d"), self.index, #self.due))
+        addDivider()
         if self.revealed then
+            addLabel(_("PERGUNTA"))
+            addWrapped(card.front, Font:getFace("cfont", 22))
+            addDivider()
+            addLabel(_("RESPOSTA"))
+            addWrapped(card.back, Font:getFace("cfont", 26))
             addSpan(PADDING)
-            addWrapped(card.back, Font:getFace("cfont", 24))
-            addSpan(PADDING)
-            for grade_index, label in ipairs(SRS.GRADES) do
-                addButton(label, function() self:onGrade(grade_index) end)
-                addSpan(Size.padding.small)
-            end
+            addLabel(_("COMO FOI?"))
+            addSpan(Size.padding.small)
+            addButtonRow(Present.ratingLabels(), function(grade_index) self:onGrade(grade_index) end)
         else
+            addLabel(_("PERGUNTA"))
+            addWrapped(card.front, Font:getFace("cfont", 26))
             addSpan(PADDING)
-            addButton(_("Show answer"), function()
+            addButton(_("MOSTRAR RESPOSTA"), function()
                 self.revealed = true
                 self:_populate()
             end)

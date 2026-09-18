@@ -52,8 +52,20 @@ Menus are KOReader `Menu` widgets, so item text is a single flowing string
   markdown sections it replaces (`O erro`, `Prioridade`). Rendered pages are
   cached per `RENDER_LAYOUT`; bump it when the layout changes.
 
+- Quiz: header with materia · Qid, badges and `Questão X / Y`; alternatives
+  are `OptionButton`s (frame + wrapped `TextBoxWidget`, selection and keyboard
+  focus invert the frame — no colour, no font shrinking, no truncation);
+  feedback shows `✓ CORRETO` / `✗ INCORRETO`, then `VOCÊ MARCOU` /
+  `RESPOSTA CORRETA` with the full option texts and `EXPLICAÇÃO` only when the
+  question has one; the summary shows the score, the percent and
+  `✓ Aula concluída` when the lesson was marked done.
+- Flashcards: materia · Qid and badges when the card maps to a lesson,
+  `PERGUNTA` on the front, `PERGUNTA` + `RESPOSTA` on the back and the four
+  SM-2 ratings (`Again · Hard · Good · Easy`) in one row.
+
 Everything shown comes from the package manifest and the student state —
-nothing is inferred.
+nothing is inferred. Grading, persistence and the SRS scheduler are untouched
+by the presentation layer.
 
 ## Deploy to a device
 

@@ -12,6 +12,9 @@ local FocusManager = require("ui/widget/focusmanager")
 local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
+local GestureRange = require("ui/gesturerange")
+local InputContainer = require("ui/widget/container/inputcontainer")
+local LineWidget = require("ui/widget/linewidget")
 local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
 local Size = require("ui/size")
 local TextBoxWidget = require("ui/widget/textboxwidget")
@@ -22,6 +25,7 @@ local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local _ = require("gettext")
 
+local Present = require("present")
 local State = require("state")
 
 local QuizWidget = FocusManager:extend{
@@ -36,6 +40,60 @@ local QuizWidget = FocusManager:extend{
 }
 
 local PADDING = Size.padding.large
+local OPTION_FONT_SIZE = 22
+
+-- A tappable, fully wrapped alternative: Button shrinks or truncates long
+-- texts, so options get their own frame + TextBoxWidget. Selection and
+-- keyboard focus both invert the frame (no colour needed).
+local OptionButton = InputContainer:extend{
+    text = nil,
+    width = nil,
+    selected = false,
+    callback = nil,
+    show_parent = nil,
+}
+
+function OptionButton:init()
+    local inset = Size.border.button + Size.padding.button
+    self.label = TextBoxWidget:new{
+        text = self.text,
+        face = Font:getFace("cfont", OPTION_FONT_SIZE),
+        width = self.width - 2 * inset,
+    }
+    self.frame = FrameContainer:new{
+        width = self.width,
+        bordersize = Size.border.button,
+        padding = Size.padding.button,
+        background = Blitbuffer.COLOR_WHITE,
+        invert = self.selected,
+        self.label,
+    }
+    self[1] = self.frame
+    local size = self.frame:getSize()
+    self.dimen = Geom:new{ w = size.w, h = size.h }
+    self.ges_events = {
+        TapSelect = { GestureRange:new{ ges = "tap", range = function() return self.dimen end } },
+    }
+end
+
+function OptionButton:getSize()
+    return self.frame:getSize()
+end
+
+function OptionButton:onTapSelect()
+    if self.callback then self.callback() end
+    return true
+end
+
+function OptionButton:onFocus()
+    self.frame.invert = true
+    return true
+end
+
+function OptionButton:onUnfocus()
+    self.frame.invert = self.selected
+    return true
+end
 
 function QuizWidget:init()
     self.pending = {}
@@ -86,7 +144,7 @@ function QuizWidget:_populate(keep_scroll)
     else
         body = VerticalGroup:new{
             align = "left",
-            VerticalSpan:new{ width = math.floor((body_h - body:getSize().h) / 2) },
+            VerticalSpan:new{ width = PADDING },
             body,
         }
     end
@@ -143,12 +201,16 @@ function QuizWidget:_buildBody(width)
     local function addSpan(h)
         group[#group + 1] = VerticalSpan:new{ width = h }
     end
-    local function addButton(text, callback)
+    local function addButton(text, callback, opts)
+        opts = opts or {}
         local button = Button:new{
             text = text,
             width = width,
             callback = callback,
             show_parent = self,
+            align = opts.align or "center",
+            preselect = opts.preselect or false,
+            text_font_bold = opts.bold ~= false,
         }
         self.layout[#self.layout + 1] = { button }
         group[#group + 1] = CenterContainer:new{
@@ -157,92 +219,132 @@ function QuizWidget:_buildBody(width)
         }
         return button
     end
+    local function addLabel(text)
+        addText(text, Font:getFace("smallinfofont"))
+    end
+    local function addDivider()
+        addSpan(Size.padding.default)
+        group[#group + 1] = LineWidget:new{
+            dimen = Geom:new{ w = width, h = Size.line.medium },
+            background = Blitbuffer.COLOR_DARK_GRAY,
+        }
+        addSpan(Size.padding.default)
+    end
+    local function addOption(text, selected, callback)
+        local option = OptionButton:new{
+            text = text,
+            width = width,
+            selected = selected,
+            callback = callback,
+            show_parent = self,
+        }
+        self.layout[#self.layout + 1] = { option }
+        group[#group + 1] = option
+        return option
+    end
+    local ui = {
+        text = addText, wrapped = addWrapped, span = addSpan, button = addButton,
+        option = addOption, label = addLabel, divider = addDivider, width = width,
+    }
 
     if self.mode == "summary" then
-        self:_populateSummary(group, addText, addWrapped, addSpan, addButton)
+        self:_populateSummary(ui)
     elseif #self.pending == 0 then
         addText(_("Quiz done!"), Font:getFace("NotoSans-Bold.ttf", 26), true)
         addSpan(PADDING)
         addButton(_("Close"), function() self:onClose() end)
     elseif self.mode == "feedback" then
-        self:_populateFeedback(group, addText, addWrapped, addSpan, addButton)
+        self:_populateFeedback(ui)
     else
-        self:_populateQuestion(group, addText, addWrapped, addSpan, addButton)
+        self:_populateQuestion(ui)
     end
     return group
 end
 
-function QuizWidget:_populateQuestion(group, addText, addWrapped, addSpan, addButton)
+function QuizWidget:_addHeader(ui, id)
+    local header = Present.quizHeader(self.course, self.lesson, id, self.index, #self.pending)
+    ui.label(header.kicker)
+    if header.badges then
+        ui.span(Size.padding.small)
+        ui.text(header.badges, Font:getFace("smallinfofont"), true)
+    end
+    ui.span(Size.padding.small)
+    ui.label(header.counter)
+    ui.divider()
+end
+
+function QuizWidget:_populateQuestion(ui)
     local id = self.pending[self.index]
     local question = self.course.questions[id]
-    addText(string.format("%s · %s", self.lesson and self.lesson.title or "",
-        string.format(_("Question %d / %d"), self.index, #self.pending)),
-        Font:getFace("smallinfofont"))
-    addSpan(PADDING)
-    addWrapped(question.question, Font:getFace("cfont", 24))
+    self:_addHeader(ui, id)
+    ui.wrapped(question.question, Font:getFace("cfont", 24))
     if question.code then
-        addSpan(Size.padding.default)
-        addWrapped(question.code, Font:getFace("infont", 18))
+        ui.span(Size.padding.default)
+        ui.wrapped(question.code, Font:getFace("infont", 18))
     end
-    addSpan(PADDING)
+    ui.span(PADDING)
     for _, option in ipairs(question.options) do
-        local prefix = self.selected[option.id] and "☑ " or "☐ "
-        addButton(string.format("%s%s) %s", prefix, option.id, option.text), function()
+        local selected = self.selected[option.id] == true
+        ui.option(Present.optionLabel(option, selected), selected, function()
             self:onOption(option.id)
         end)
-        addSpan(Size.padding.small)
+        ui.span(Size.padding.large)
     end
     if question.type == "multiple-choice" then
-        addSpan(Size.padding.default)
-        addButton(_("Confirm"), function() self:onConfirm() end)
+        ui.span(Size.padding.default)
+        ui.button(_("Confirmar"), function() self:onConfirm() end)
     end
 end
 
-function QuizWidget:_populateFeedback(group, addText, addWrapped, addSpan, addButton)
+function QuizWidget:_populateFeedback(ui)
     local id = self.pending[self.index]
     local question = self.course.questions[id]
-    local correct_ids = {}
-    for _, oid in ipairs(question.correct) do
-        correct_ids[#correct_ids + 1] = oid .. ")"
+    self:_addHeader(ui, id)
+    local texts = Present.feedbackTexts(question, self.last_selected or {}, self.last_correct)
+    ui.text(texts.headline, Font:getFace("NotoSans-Bold.ttf", 28), true)
+    if texts.marked then
+        ui.span(PADDING)
+        ui.label(_("VOCÊ MARCOU"))
+        ui.wrapped(texts.marked, Font:getFace("cfont", 22))
+        ui.span(Size.padding.default)
+        ui.label(_("RESPOSTA CORRETA"))
+        ui.wrapped(texts.correct, Font:getFace("cfont", 22))
     end
-    if self.last_correct then
-        addText("✓ " .. _("Correct!"), Font:getFace("NotoSans-Bold.ttf", 26), true)
-    else
-        addText("✗ " .. _("Incorrect"), Font:getFace("NotoSans-Bold.ttf", 26), true)
-        addSpan(Size.padding.small)
-        addText(_("Correct answer:") .. " " .. table.concat(correct_ids, " "),
-            Font:getFace("cfont", 22))
+    if texts.explanation then
+        ui.divider()
+        ui.label(_("EXPLICAÇÃO"))
+        ui.wrapped(texts.explanation, Font:getFace("cfont", 22))
     end
-    if question.explanation then
-        addSpan(PADDING)
-        addWrapped(question.explanation, Font:getFace("cfont", 22))
-    end
-    addSpan(PADDING)
+    ui.span(PADDING)
     if self.index < #self.pending then
-        addButton(_("Next question"), function() self:onNext() end)
+        ui.button(_("PRÓXIMA QUESTÃO"), function() self:onNext() end)
     else
-        addButton(_("See results"), function() self:onFinish() end)
+        ui.button(_("VER RESULTADO"), function() self:onFinish() end)
     end
 end
 
-function QuizWidget:_populateSummary(group, addText, addWrapped, addSpan, addButton)
-    local pct = self.session_total > 0
-        and math.floor(self.session_correct * 100 / self.session_total) or 0
-    addText(_("Lesson complete!"), Font:getFace("NotoSans-Bold.ttf", 30), true)
-    addSpan(PADDING)
-    addWrapped(string.format(_("Score: %d / %d (%d%%)"),
-        self.session_correct, self.session_total, pct),
-        Font:getFace("cfont", 26))
-    addSpan(PADDING)
+function QuizWidget:_populateSummary(ui)
+    local lesson_done = self.lesson ~= nil and State.completedLesson(self.state, self.lesson.id)
+    local texts = Present.summaryTexts(self.session_correct, self.session_total, lesson_done)
+    ui.text(texts.title, Font:getFace("NotoSans-Bold.ttf", 30), true)
+    ui.divider()
+    ui.label(_("SCORE"))
+    ui.text(texts.score, Font:getFace("NotoSans-Bold.ttf", 34), true)
+    ui.text(texts.percent, Font:getFace("cfont", 26))
+    if texts.status then
+        ui.span(Size.padding.default)
+        ui.text(texts.status, Font:getFace("cfont", 22), true)
+    end
+    ui.span(PADDING)
     if self.next_lesson then
-        addButton(string.format(_("Next lesson: %s"), self.next_lesson.title),
+        ui.button(string.format(_("PRÓXIMA AULA: %s"), self.next_lesson.title),
             function()
                 UIManager:close(self)
                 if self.onNext then self.onNext() end
             end)
-        addSpan(Size.padding.default)
+        ui.span(Size.padding.default)
     end
-    addButton(_("Back to course"), function() self:onClose() end)
+    ui.button(_("VOLTAR AO CURSO"), function() self:onClose() end, { bold = false })
 end
 
 function QuizWidget:onOption(option_id)
@@ -288,6 +390,7 @@ function QuizWidget:_grade()
     State.recordAnswer(self.state, id, selected, correct)
     State.save(self.course.id, self.state)
     self.last_correct = correct
+    self.last_selected = selected
     self.mode = "feedback"
     self:_populate()
 end

@@ -177,7 +177,7 @@ end)
 -- QuizWidget runs against minimal fakes of the KOReader widgets it uses: they
 -- only report sizes, which is what the layout logic depends on. The real
 -- quiz.lua and state.lua are loaded.
-local function withQuizWidget(screen_w, screen_h, fn)
+local function withStudyWidget(module_name, screen_w, screen_h, fn)
 	local function extend(base, o)
 		o = o or {}
 		o.new = function(cls, inst)
@@ -208,10 +208,26 @@ local function withQuizWidget(screen_w, screen_h, fn)
 		end
 		return { w = w, h = h }
 	end)
+	local HorizontalGroup = widget(function(self)
+		local w, h = 0, 0
+		for _, child in ipairs(self) do
+			local size = child:getSize()
+			w = w + size.w
+			h = math.max(h, size.h)
+		end
+		return { w = w, h = h }
+	end)
 	local saves = {}
+	local shown = {}
 	local stubs = {
-		["ffi/blitbuffer"] = { COLOR_WHITE = 0 },
+		["ffi/blitbuffer"] = { COLOR_WHITE = 0, COLOR_BLACK = 1, COLOR_DARK_GRAY = 2, COLOR_LIGHT_GRAY = 3 },
 		["ui/widget/button"] = widget(function(self) return { w = self.width, h = 40 } end),
+		["ui/widget/horizontalgroup"] = HorizontalGroup,
+		["ui/widget/horizontalspan"] = widget(function(self) return { w = self.width, h = 0 } end),
+		["ui/widget/linewidget"] = widget(function(self) return self.dimen end),
+		["ui/widget/infomessage"] = widget(function() return { w = 0, h = 0 } end),
+		["ui/widget/container/inputcontainer"] = extend({}, { key_events = {} }),
+		["ui/gesturerange"] = { new = function(_, t) return t end },
 		["ui/widget/container/centercontainer"] = widget(function(self) return self.dimen end),
 		["device"] = {
 			screen = { getWidth = function() return screen_w end, getHeight = function() return screen_h end },
@@ -224,11 +240,12 @@ local function withQuizWidget(screen_w, screen_h, fn)
 		["ui/font"] = { getFace = function(_, _, size) return { size = size or 20 } end },
 		["ui/widget/container/framecontainer"] = widget(function(self)
 			local size = self[1]:getSize()
-			return { w = size.w + 2 * self.padding, h = size.h + 2 * self.padding }
+			local inset = (self.padding or 0) + (self.bordersize or 0)
+			return { w = self.width or (size.w + 2 * inset), h = size.h + 2 * inset }
 		end),
 		["ui/geometry"] = { new = function(_, t) return t end },
 		["ui/widget/container/scrollablecontainer"] = ScrollableContainer,
-		["ui/size"] = { padding = { large = 15, default = 5, small = 2 } },
+		["ui/size"] = { padding = { large = 15, default = 5, small = 2, button = 4 }, line = { thin = 1, medium = 2, thick = 3 }, border = { button = 2 } },
 		["ui/widget/textboxwidget"] = widget(function(self)
 			local per_line = math.floor(self.width / (self.face.size * 0.5))
 			local lines = 0
@@ -242,7 +259,7 @@ local function withQuizWidget(screen_w, screen_h, fn)
 		end),
 		["ui/widget/titlebar"] = extend(widget(function(self) return { w = self.width, h = 80 } end),
 			{ getHeight = function() return 80 end }),
-		["ui/uimanager"] = { setDirty = function() end, close = function() end },
+		["ui/uimanager"] = { setDirty = function() end, close = function() end, show = function(_, w) shown[#shown + 1] = w end },
 		["ui/widget/verticalgroup"] = VerticalGroup,
 		["ui/widget/verticalspan"] = widget(function(self) return { w = 0, h = self.width } end),
 		["gettext"] = function(s) return s end,
@@ -257,29 +274,57 @@ local function withQuizWidget(screen_w, screen_h, fn)
 		package.loaded[name] = mod
 	end
 	saved.state = package.loaded.state
+	saved.srs = package.loaded.srs
+	saved.present = package.loaded.present
 	local ok, err = pcall(function()
 		local State = dofile(plugin .. "state.lua")
 		State.save = function(course_id, state) saves[#saves + 1] = { course_id, state } end
 		package.loaded.state = State
-		local QuizWidget = dofile(plugin .. "quiz.lua")
-		fn(QuizWidget, saves)
+		package.loaded.srs = dofile(plugin .. "srs.lua")
+		package.loaded.present = dofile(plugin .. "present.lua")
+		local Widget = dofile(plugin .. module_name)
+		fn(Widget, saves, shown)
 	end)
 	for name in pairs(stubs) do
 		package.loaded[name] = saved[name]
 	end
 	package.loaded.state = saved.state
+	package.loaded.srs = saved.srs
+	package.loaded.present = saved.present
 	assert(ok, err)
+end
+
+local function withQuizWidget(screen_w, screen_h, fn)
+	withStudyWidget("quiz.lua", screen_w, screen_h, fn)
+end
+
+local function withReviewWidget(screen_w, screen_h, fn)
+	withStudyWidget("review.lua", screen_w, screen_h, fn)
+end
+
+local function walkWidgets(root, fn)
+	local function walk(node)
+		if type(node) ~= "table" then return end
+		fn(node)
+		for _, child in ipairs(node) do walk(child) end
+	end
+	walk(root)
 end
 
 local function quizButtons(w)
 	local found = {}
-	local function walk(node)
-		if type(node) ~= "table" then return end
+	walkWidgets(w.cropping_widget or w[1], function(node)
 		if node.callback and node.text then found[#found + 1] = node end
-		for _, child in ipairs(node) do walk(child) end
-	end
-	walk(w.cropping_widget)
+	end)
 	return found
+end
+
+local function allTexts(root)
+	local texts = {}
+	walkWidgets(root, function(node)
+		if type(node.text) == "string" then texts[#texts + 1] = node.text end
+	end)
+	return table.concat(texts, "\n")
 end
 
 local function buttonTexts(w)
@@ -364,7 +409,7 @@ check("quiz: answering records state and each screen starts at the top", functio
 		assert(w.cropping_widget ~= question_view, "feedback reuses the question view")
 		assert(question_view.closed, "old view buffer not released")
 		assert((w.cropping_widget.offset_y or 0) == 0, "feedback not at the top")
-		assert(buttonTexts(w) == "See results", buttonTexts(w))
+		assert(buttonTexts(w) == "VER RESULTADO", buttonTexts(w))
 		w.cropping_widget.offset_y = 50
 		w:onFinish()
 		assert(w.mode == "summary", "no summary")
@@ -385,7 +430,7 @@ check("quiz: multiple-choice toggles keep the scroll position", function()
 		w:onOption("A")
 		assert(w.cropping_widget.offset_y == 900, "toggle jumped away from the options")
 		assert(quizButtons(w)[1].text:match("^☑ A%)"), "toggle not shown")
-		assert(buttonTexts(w):match("Confirm$"), "Confirm reachable in the body")
+		assert(buttonTexts(w):match("Confirmar$"), "Confirm reachable in the body")
 		w:onOption("C")
 		w:onConfirm()
 		assert(w.state.answers.q1.correct == true, "multiple-choice grading")
@@ -521,6 +566,195 @@ check("md2xhtml accepts a prepended panel, extra css and skips leading title hea
 	local skipped = md2xhtml.convert(with_priority, "T", "", { skip_sections = { ["Prioridade"] = true } })
 	assert(not skipped.xhtml:match("Prioridade") and not skipped.xhtml:match("razão 1"), "priority section skipped")
 	assert(skipped.xhtml:match("O erro") and skipped.xhtml:match("Explicação") and skipped.xhtml:match("Fim%."), "other sections kept")
+end)
+
+local function metaCourse()
+	local course = sampleCourse()
+	course.id = "c1"
+	course.questions = {
+		["111-recovery"] = {
+			type = "single-choice",
+			question = "Enunciado da questão 111.",
+			options = { { id = "A", text = "Alternativa A" }, { id = "B", text = "Alternativa B" } },
+			correct = { "B" },
+			explanation = "Porque B está correta.",
+		},
+		["333-recovery"] = {
+			type = "single-choice",
+			question = "Enunciado 333.",
+			options = { { id = "C", text = "Certo" }, { id = "E", text = "Errado" } },
+			correct = { "E" },
+		},
+	}
+	course.flashcards = {
+		{ id = "111-card", front = "Pergunta do card 111?", back = "Resposta do card 111." },
+		{ id = "333-card", front = "Pergunta 333?", back = "Resposta 333." },
+	}
+	return course
+end
+
+check("present: quiz header, option labels, feedback and summary texts", function()
+	local course = metaCourse()
+	local lesson = course.manifest.modules[1].lessons[1]
+	local header = Present.quizHeader(course, lesson, "111-recovery", 1, 3)
+	assert(header.kicker == "DIREITO TRIBUTÁRIO · Q111", "kicker: " .. tostring(header.kicker))
+	assert(header.badges == "[CRITICAL] [LAPSING]", "badges: " .. tostring(header.badges))
+	assert(header.counter == "Questão 1 / 3", "counter")
+	local bare = Present.quizHeader({ manifest = {} }, { id = "l1", title = "Lesson" }, "q1", 2, 2)
+	assert(bare.kicker == "LESSON" and bare.badges == nil and bare.counter == "Questão 2 / 2", "no metadata → no badges, lesson title as kicker")
+
+	assert(Present.optionLabel({ id = "A", text = "Texto" }, false) == "☐ A) Texto", "unselected label")
+	assert(Present.optionLabel({ id = "A", text = "Texto" }, true) == "☑ A) Texto", "selected label")
+
+	local wrong = Present.feedbackTexts(course.questions["111-recovery"], { "A" }, false)
+	assert(wrong.headline == "✗ INCORRETO", "wrong headline")
+	assert(wrong.marked == "A) Alternativa A" and wrong.correct == "B) Alternativa B", "marked/correct with full text")
+	assert(wrong.explanation == "Porque B está correta.", "explanation")
+	local right = Present.feedbackTexts(course.questions["333-recovery"], { "E" }, true)
+	assert(right.headline == "✓ CORRETO" and right.marked == nil and right.correct == nil, "correct feedback hides answers")
+	assert(right.explanation == nil, "no explanation is not invented")
+
+	local summary = Present.summaryTexts(1, 1, true)
+	assert(summary.title == "REVISÃO CONCLUÍDA" and summary.score == "1 / 1" and summary.percent == "100%", "summary")
+	assert(summary.status == "✓ Aula concluída", "lesson done status")
+	local partial = Present.summaryTexts(0, 2, false)
+	assert(partial.title == "QUIZ CONCLUÍDO" and partial.percent == "0%" and partial.status == nil, "partial summary")
+end)
+
+check("present: flashcard metadata comes from the card id and the manifest", function()
+	local course = metaCourse()
+	local info = Present.cardMeta(course, course.flashcards[1])
+	assert(info.materia == "Direito Tributário" and info.badges == "[CRITICAL] [LAPSING]", "card 111 metadata")
+	local none = Present.cardMeta(course, course.flashcards[2])
+	assert(none.materia == "Contabilidade Geral" and none.badges == nil, "card 333: materia but no priority metadata")
+	local orphan = Present.cardMeta(course, { id = "adm-podc-card1" })
+	assert(orphan.materia == nil and orphan.badges == nil, "unknown card → nothing")
+	assert(Present.ratingLabels()[1] == "Again" and #Present.ratingLabels() == 4, "rating labels")
+end)
+
+check("quiz: header shows metadata and the selected option is highlighted", function()
+	withQuizWidget(600, 800, function(QuizWidget)
+		local course = metaCourse()
+		local w = QuizWidget:new{
+			course = course,
+			lesson = course.manifest.modules[1].lessons[1],
+			question_ids = { "111-recovery" },
+			state = { progress = {}, answers = {}, reviews = {} },
+		}
+		local texts = allTexts(w.cropping_widget)
+		assert(texts:match("DIREITO TRIBUTÁRIO · Q111"), "kicker missing: " .. texts)
+		assert(texts:match("%[CRITICAL%] %[LAPSING%]"), "badges missing")
+		assert(texts:match("Questão 1 / 1"), "counter missing")
+		assert(texts:match("Enunciado da questão 111%."), "statement missing")
+		local buttons = quizButtons(w)
+		assert(not buttons[1].frame.invert and not buttons[2].frame.invert, "nothing selected")
+		assert(buttons[1].label.text == "☐ A) Alternativa A", "option label")
+		assert(buttons[1]:getSize().w == w.cropping_widget.dimen.w, "options span the body width")
+	end)
+	withQuizWidget(600, 800, function(QuizWidget)
+		local question = {}
+		for k, v in pairs(LONG_QUESTION) do question[k] = v end
+		question.type = "multiple-choice"
+		question.correct = { "A", "C" }
+		local w = newQuiz(QuizWidget, question)
+		w:onOption("C")
+		local buttons = quizButtons(w)
+		assert(buttons[3].frame.invert == true and buttons[3].text:match("^☑ C%)"), "selected option inverted + checked")
+		assert(not buttons[1].frame.invert, "others not inverted")
+		buttons[3]:onTapSelect()
+		assert(not quizButtons(w)[3].frame.invert, "tap toggles the selection off again")
+		assert(buttonTexts(w):match("Confirmar$"), "confirm stays explicit")
+	end)
+end)
+
+check("quiz: long alternatives wrap instead of shrinking or truncating", function()
+	withQuizWidget(600, 800, function(QuizWidget)
+		local w = newQuiz(QuizWidget, LONG_QUESTION)
+		local option = quizButtons(w)[1]
+		assert(option.label.width and option.label.width < 600, "option text is a wrapped TextBoxWidget")
+		assert(option:getSize().h > 40, "wrapped option is taller than a one-line button: " .. option:getSize().h)
+		assert(option.label.face.size == 22, "option font size is not reduced")
+	end)
+end)
+
+check("quiz: feedback shows marked vs correct answers, explanation only when present", function()
+	withQuizWidget(600, 800, function(QuizWidget)
+		local course = metaCourse()
+		local w = QuizWidget:new{
+			course = course,
+			lesson = course.manifest.modules[1].lessons[1],
+			question_ids = { "111-recovery" },
+			state = { progress = {}, answers = {}, reviews = {} },
+		}
+		w:onOption("A")
+		local texts = allTexts(w.cropping_widget)
+		assert(texts:match("✗ INCORRETO"), "incorrect headline")
+		assert(texts:match("VOCÊ MARCOU") and texts:match("A%) Alternativa A"), "marked answer")
+		assert(texts:match("RESPOSTA CORRETA") and texts:match("B%) Alternativa B"), "correct answer")
+		assert(texts:match("EXPLICAÇÃO") and texts:match("Porque B está correta%."), "explanation")
+		assert(w.state.answers["111-recovery"].correct == false, "grading unchanged")
+	end)
+	withQuizWidget(600, 800, function(QuizWidget)
+		local course = metaCourse()
+		local w = QuizWidget:new{
+			course = course,
+			lesson = course.manifest.modules[2].lessons[1],
+			question_ids = { "333-recovery" },
+			state = { progress = {}, answers = {}, reviews = {} },
+		}
+		w:onOption("E")
+		local texts = allTexts(w.cropping_widget)
+		assert(texts:match("✓ CORRETO"), "correct headline")
+		assert(not texts:match("VOCÊ MARCOU") and not texts:match("EXPLICAÇÃO"), "no answers/explanation block when correct and none exists")
+		assert(w.state.answers["333-recovery"].correct == true, "grading unchanged")
+	end)
+end)
+
+check("quiz: long feedback still scrolls and the summary reports score and completion", function()
+	withQuizWidget(600, 800, function(QuizWidget)
+		local question = {}
+		for k, v in pairs(LONG_QUESTION) do question[k] = v end
+		question.explanation = string.rep("Explicação longa da alternativa correta. ", 60)
+		local w = newQuiz(QuizWidget, question)
+		w:onOption("A")
+		local view = w.cropping_widget
+		assert(view[1]:getSize().h > view.dimen.h, "long feedback should overflow the viewport")
+		assert(view[1]:getSize().w <= view.dimen.w - 18, "feedback leaves room for the scrollbar")
+		assert((view.offset_y or 0) == 0, "feedback starts at the top")
+		w:onFinish()
+		local texts = allTexts(w.cropping_widget)
+		assert(texts:match("REVISÃO CONCLUÍDA") or texts:match("QUIZ CONCLUÍDO"), "summary title")
+		assert(texts:match("0 / 1") and texts:match("0%%"), "score")
+		assert(texts:match("✓ Aula concluída"), "completion status")
+		assert(buttonTexts(w):match("VOLTAR AO CURSO$"), buttonTexts(w))
+	end)
+end)
+
+check("review: flashcard front/back layout and the four ratings map to SRS grades", function()
+	withReviewWidget(600, 800, function(ReviewWidget, saves, shown)
+		local course = metaCourse()
+		local state = { progress = {}, answers = {}, reviews = {} }
+		local w = ReviewWidget:new{ course = course, state = state }
+		local texts = allTexts(w[1])
+		assert(texts:match("DIREITO TRIBUTÁRIO"), "materia on the front: " .. texts)
+		assert(texts:match("%[CRITICAL%] %[LAPSING%]"), "badges on the front")
+		assert(texts:match("Pergunta do card 111%?"), "front text")
+		assert(not texts:match("Resposta do card 111"), "back hidden before reveal")
+		assert(buttonTexts(w) == "MOSTRAR RESPOSTA", buttonTexts(w))
+		quizButtons(w)[1].callback()
+		texts = allTexts(w[1])
+		assert(texts:match("Pergunta do card 111%?") and texts:match("Resposta do card 111%."), "question kept with the answer")
+		local ratings = quizButtons(w)
+		assert(#ratings == 4, "four ratings")
+		assert(ratings[1].text == "Again" and ratings[2].text == "Hard" and ratings[3].text == "Good" and ratings[4].text == "Easy", buttonTexts(w))
+		ratings[1].callback()
+		assert(state.reviews["111-card"].lapses == 1 and state.reviews["111-card"].reps == 0, "Again → lapse")
+		assert(#saves == 1, "state saved")
+		quizButtons(w)[1].callback()
+		quizButtons(w)[3].callback()
+		assert(state.reviews["333-card"].reps == 1 and state.reviews["333-card"].interval == 1, "Good → first interval")
+		assert(#shown == 1, "done message shown after the last card")
+	end)
 end)
 
 if failures > 0 then
