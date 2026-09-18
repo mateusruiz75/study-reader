@@ -1,0 +1,24 @@
+[
+  {
+    "id": "const-inafastabilidade-card1",
+    "front": "O que estabelece o art. 5º, XXXV, da Constituição?",
+    "back": "A lei não excluirá da apreciação do Poder Judiciário lesão ou ameaça a direito.",
+    "tags": [
+      "constitucional",
+      "art-5",
+      "inafastabilidade",
+      "erro"
+    ]
+  },
+  {
+    "id": "adm-podc-card1",
+    "front": "Qual função administrativa acompanha resultados, compara desempenho com padrões e corrige desvios?",
+    "back": "Controle.",
+    "tags": [
+      "administracao",
+      "podc",
+      "controle",
+      "erro"
+    ]
+  }
+]

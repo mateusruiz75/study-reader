@@ -1,0 +1,33 @@
+{
+  "formatVersion": 1,
+  "id": "indio-fiscal-erros",
+  "version": 1,
+  "title": "ÍNDIO FISCAL — Livro de Erros",
+  "description": "Erros reais, revisões, questões e flashcards para concursos fiscais e policiais.",
+  "author": "ÍNDIO Fiscal",
+  "language": "pt-BR",
+  "modules": [
+    {
+      "id": "constitucional",
+      "title": "01. Direito Constitucional",
+      "lessons": [
+        {
+          "id": "const-inafastabilidade-001",
+          "title": "Inafastabilidade da Jurisdição",
+          "content": "content/001-inafastabilidade.md"
+        }
+      ]
+    },
+    {
+      "id": "administracao",
+      "title": "02. Administração",
+      "lessons": [
+        {
+          "id": "adm-podc-controle-001",
+          "title": "PODC — Função Controle",
+          "content": "content/002-podc-controle.md"
+        }
+      ]
+    }
+  ]
+}

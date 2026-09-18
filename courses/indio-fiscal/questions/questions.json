@@ -1,0 +1,42 @@
+{
+  "const-inafastabilidade-q1": {
+    "type": "single-choice",
+    "question": "Em regra, o acesso ao Poder Judiciário depende do esgotamento prévio da via administrativa?",
+    "options": [
+      {
+        "id": "a",
+        "text": "Sim, sempre."
+      },
+      {
+        "id": "b",
+        "text": "Não."
+      }
+    ],
+    "correct": ["b"],
+    "explanation": "A inafastabilidade da jurisdição assegura a apreciação judicial de lesão ou ameaça a direito, não havendo como regra geral exigência de esgotamento prévio da via administrativa."
+  },
+  "adm-podc-q1": {
+    "type": "single-choice",
+    "question": "Estabelecer padrões, acompanhar o desempenho, identificar desvios e adotar correções corresponde principalmente a qual função administrativa?",
+    "options": [
+      {
+        "id": "a",
+        "text": "Planejamento"
+      },
+      {
+        "id": "b",
+        "text": "Organização"
+      },
+      {
+        "id": "c",
+        "text": "Direção"
+      },
+      {
+        "id": "d",
+        "text": "Controle"
+      }
+    ],
+    "correct": ["d"],
+    "explanation": "Controle envolve medir resultados, compará-los aos padrões estabelecidos e corrigir desvios."
+  }
+}
