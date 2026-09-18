@@ -3,10 +3,7 @@ import { strFromU8, unzipSync } from "fflate";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildStudy, readStudy, validateCrossReferences } from "../src/index.ts";
-import {
-	adaptLedger,
-	selectTechnicalBatch,
-} from "../scripts/adapters/error-notebook-ledger.ts";
+import { adaptLedger } from "../scripts/adapters/error-notebook-ledger.ts";
 import { buildReviewCourse, REVIEW_COURSE_ID } from "../scripts/review-course.ts";
 
 type Question = {
@@ -202,9 +199,18 @@ describe("phase 2B: review course", () => {
 		expect(paths).toContain("content/error-adm-podc-q1.md");
 	});
 
-	it("selects a deterministic technical batch across materias", () => {
-		const batch = selectTechnicalBatch(events(), 2, 1);
+	it("extracts the full attempt history with results derived only from the data", () => {
+		const { attempts, latestEventAt, answersSeen } = adaptLedger(ledger());
 
-		expect(batch.map((e) => e.questionId)).toEqual(["synthetic-q3", "const-inafastabilidade-q1"]);
+		expect(answersSeen).toBe(1);
+		expect(latestEventAt).toBe("2026-09-05T10:00:00Z");
+		expect(attempts.map((a) => [a.eventId, a.result])).toEqual([
+			["ev-01", "error"],
+			["ev-02", "error"],
+			["ev-03", "error"],
+			["ev-04", "error"],
+			["ev-05", "error"],
+			["ev-06", "correct"],
+		]);
 	});
 });

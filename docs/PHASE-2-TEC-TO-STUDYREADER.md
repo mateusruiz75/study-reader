@@ -377,8 +377,8 @@ Regras:
 - Dedupe determinístico por `questionId`: fica a ocorrência mais recente
   (`occurredAt`, desempate por `eventId`). `recorrencia` conta todas as
   ocorrências de erro, inclusive as sem conteúdo.
-- Lote técnico (não é priorização): matérias em ordem alfabética, até 2 erros
-  por matéria, os mais recentes primeiro, até 10 no total.
+- Lote técnico da 2B (matérias em ordem alfabética, 2 por matéria, 10 no
+  total) foi substituído pela priorização da 2C.
 - Curso: `manifest.id = indio-revisao`, título "ÍNDIO REVISÃO — Livro de
   Erros". Um módulo por matéria e uma aula, um quiz e um flashcard por erro,
   todos via `buildErrorLesson()` da 2A. Os ids derivam do `questionId`.
@@ -391,12 +391,125 @@ Comando:
 INDIO_LEDGER="<vault>/99 - Sistema/Eventos/Checkpoints/obsidian-error-notebook-v1/ledger.json" pnpm study:build-review
 ```
 
-ou `pnpm study:build-review <ledger.json> [output.study] [--limit 10] [--per-materia 2] [--version 1]`.
-Saída padrão: `examples/INDIO-REVISAO.study`, ignorado pelo git.
+ou `pnpm study:build-review <ledger.json> [output.study] [--limit 30] [--max-per-materia 6] [--version 1]`
+(flags completas na 2C). Saída padrão: `examples/INDIO-REVISAO.study`,
+ignorado pelo git.
 
 Os testes (`tests/review-course.test.ts`) usam uma fixture no formato do ledger
 montada com as questões já versionadas em `courses/indio-fiscal` e uma entrada
 sintética explicitamente marcada.
+
+## PHASE 2C — Prioridade do Caderno de Erros
+
+Substitui o lote técnico da 2B por uma priorização determinística, sem LLM e
+sem dados inventados. Pipeline:
+
+```
+ledger → adapter (ErrorEvent[] + AttemptRecord[]) → dedupe → PriorityFeatures
+→ banda + reasons → ordenação → seleção balanceada → INDIO-REVISAO.study
+```
+
+Código: `packages/study-format/scripts/review-priority.ts`; testes em
+`tests/review-priority.test.ts` (fixtures sintéticas).
+
+### O que o ledger permite derivar
+
+O adapter extrai **todo** o histórico de cada `questionId` como
+`AttemptRecord { result: "error" | "correct" | "unknown" }`:
+
+| Evento | Resultado |
+| --- | --- |
+| `knowledge.error_recorded` | `error` (com ou sem `content`) |
+| `knowledge.answer_recorded` com `content.correctAnswer` | comparação com `respostaUsuario` |
+| `knowledge.answer_recorded` com `sourceEventId` `desempenho:<id>_acertou:` / `_errou:` | `correct` / `error` |
+| `knowledge.answer_recorded` sem nenhum dos dois | `unknown` — não conta como acerto |
+
+Só questões com pelo menos um `error_recorded` com `content` viram aula (regra
+da 2B), mas as features usam o histórico completo, inclusive erros e acertos
+sem `content`.
+
+`PriorityFeatures` por questão: `errorCount`, `attemptCount`, `correctCount`,
+`unknownCount`, `firstErrorAt`, `lastErrorAt`, `lastAttemptAt`,
+`latestResult`, `correctAfterLastError` (acertos consecutivos após o último
+erro), `errorsAfterCorrect` (erros precedidos por algum acerto),
+`daysSinceLastError`, `recurrence` (`errorCount >= 2`), `wrongAnswerPattern`
+(`repeated` / `varied` / `null` se erro único) e `asOf`.
+
+`asOf` é o `occurredAt` mais recente do ledger (sobrescritível com `--as-of`),
+nunca `Date.now()`: o mesmo ledger produz sempre a mesma classificação.
+
+### Bandas
+
+Flags derivadas: `recent` = último erro há ≤ 7 dias; `old` = > 21 dias;
+`relapsed` = recorrente **e** `errorsAfterCorrect > 0`; `recovered` =
+`correctAfterLastError >= 2` (ou `>= 3` se já houve recaída — uma questão que
+já oscilou precisa de mais evidência).
+
+Primeira regra que casa, de cima para baixo:
+
+| Banda | Regra | Condição |
+| --- | --- | --- |
+| CRITICAL | `relapse-unrecovered` | `relapsed && !recovered` |
+| CRITICAL | `many-recent-errors` | `errorCount >= 3 && recent` |
+| HIGH | `recurrent-unrecovered` | `recurrence && !recovered` |
+| HIGH | `recurrent-recent` | `recurrence && recent` |
+| MEDIUM | `unrecovered` | `correctAfterLastError == 0` (erro isolado nunca recuperado, qualquer idade) |
+| MEDIUM / LOW | `partially-recovered` | 1 acerto após o erro: MEDIUM se não for `old`, LOW se for |
+| MEDIUM | `recovered-recent` | recuperado, mas `recent` |
+| LOW | `recovered` | recuperação consistente e erro não recente |
+
+Um erro único após um acerto (`correct → error`) não é recaída: a regra exige
+recorrência.
+
+### Reasons
+
+Cada item carrega `reasons`: a frase da regra aplicada seguida dos fatos
+(`"N erros registrados"`, `"último erro há N dias"`, `"N erros após acerto"`,
+`"N acertos após o último erro"` / `"nenhum acerto após o último erro"`,
+`"N tentativas com resultado desconhecido"`, padrão da alternativa errada).
+Nenhum texto é gerado por IA. Com profile, acrescenta
+`"matéria priorizada no perfil"`.
+
+### Profile (opcional)
+
+`--profile profile.json` com `{ "materiaBoosts": { "<matéria>": 1 } }`
+(valores 0 ou 1). O boost só desempata **dentro da mesma banda**; não altera
+features nem bandas. Sem profile, todos os boosts são 0.
+
+### Ordenação e seleção
+
+Ordem total, determinística: banda → boost → `errorCount` desc →
+`errorsAfterCorrect` desc → `correctAfterLastError` asc → `lastErrorAt` desc →
+`questionId`.
+
+`selectBalanced(items, { limit, maxPerMateria })` percorre a lista ordenada e
+aceita o item se a matéria ainda tem vaga e o total ainda cabe; caso contrário
+registra `rejectedBecause: "max-per-materia" | "limit"`. Uma matéria grande
+não ocupa o livro inteiro, mas a prioridade global continua mandando.
+
+### Curso
+
+`manifest.id` continua `indio-revisao`; ids de aula/quiz/flashcard continuam
+derivados do `questionId` (`error-<id>`, `<id>-recovery`, `<id>-card`), então
+mudar a prioridade não reseta progresso nem SRS. Módulos por matéria em ordem
+alfabética; aulas dentro do módulo em ordem de prioridade. A aula ganha uma
+seção `### Prioridade` com a banda e as reasons.
+
+`extensions.indio`: `phase: "2C"`, `dedupeKeys`, `eventIds`, `priorityAsOf` e
+`priorities[<dedupeKey>]` com `priority`, `rule`, `priorityReasons`,
+`recurrence`, `errorCount`, `attemptCount`, `correctAfterLastError`,
+`errorsAfterCorrect`, `lastErrorAt`, `daysSinceLastError`, `latestResult`,
+`wrongAnswerPattern`. Sem timestamp de build.
+
+### CLI
+
+```
+INDIO_LEDGER="<vault>/.../obsidian-error-notebook-v1/ledger.json" pnpm study:build-review --limit 30 --max-per-materia 6   [--as-of 2026-09-17T00:00:00Z] [--profile profile.json]   [--priority-report report.md] [--version 1]
+```
+
+`--priority-report` grava uma tabela com `questionId`, matéria, banda, regra,
+`selected YES/NO (motivo)` e reasons de **todas** as questões analisadas. O
+relatório contém dados reais: não versionar.
 
 ## Sequência das fases
 
@@ -404,6 +517,6 @@ sintética explicitamente marcada.
 | --- | --- |
 | **2A** | JSON de 1 erro → `.study` válido |
 | 2B | Caderno de Erros → builder (adapter de ingest + dedupe) |
-| 2C | Priorização (heurística da etapa 4 calibrada com dados reais) |
+| **2C** | Priorização determinística (bandas, recaída/recuperação, seleção balanceada) |
 | 2D | Deploy automático via `adb -s` com verificação de hash |
 | 2E | Feedback SRS → inteligência (etapa 9) |

@@ -90,7 +90,12 @@ function describeAnswer(event: ErrorEvent, ids: string[]): string {
 		.join("; ");
 }
 
-export function renderErrorLesson(event: ErrorEvent): string {
+export type LessonPriority = {
+	priority: string;
+	reasons: string[];
+};
+
+export function renderErrorLesson(event: ErrorEvent, priority?: LessonPriority): string {
 	const ids = errorCourseIds(event);
 	const sections = [`# ${event.materia}`];
 	if (event.assunto) sections.push(`## ${event.assunto}`);
@@ -101,6 +106,15 @@ export function renderErrorLesson(event: ErrorEvent): string {
 			`- **Resposta marcada:** ${describeAnswer(event, event.respostaMarcada)}`,
 			`- **Resposta correta:** ${describeAnswer(event, event.respostaCorreta)}`,
 		].join("\n"),
+	);
+	if (priority) {
+		sections.push(
+			"### Prioridade",
+			`**${priority.priority}**`,
+			priority.reasons.map((reason) => `- ${reason}`).join("\n"),
+		);
+	}
+	sections.push(
 		"### Explicação",
 		event.explicacaoOriginal ?? "Sem explicação original registrada.",
 		"### Revisão ativa",
@@ -119,7 +133,7 @@ export type ErrorLesson = {
 	flashcard: StudyFlashcard;
 };
 
-export function buildErrorLesson(event: ErrorEvent): ErrorLesson {
+export function buildErrorLesson(event: ErrorEvent, priority?: LessonPriority): ErrorLesson {
 	const ids = errorCourseIds(event);
 	const correct = describeAnswer(event, event.respostaCorreta);
 	const questionLabel = event.questionId ?? event.eventId;
@@ -131,7 +145,7 @@ export function buildErrorLesson(event: ErrorEvent): ErrorLesson {
 			title: event.assunto ?? event.materia,
 			content: ids.lessonPath,
 		},
-		markdown: renderErrorLesson(event),
+		markdown: renderErrorLesson(event, priority),
 		question: {
 			type: event.respostaCorreta.length === 1 ? "single-choice" : "multiple-choice",
 			question: event.enunciado,

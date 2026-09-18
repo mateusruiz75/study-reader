@@ -8,6 +8,7 @@ import {
 	type StudyPackage,
 } from "../src/index.ts";
 import { buildErrorLesson, dedupeKey, type ErrorEvent } from "./error-event.ts";
+import type { PrioritizedError } from "./review-priority.ts";
 
 export const REVIEW_COURSE_ID = "indio-revisao";
 export const REVIEW_COURSE_TITLE = "ÍNDIO REVISÃO — Livro de Erros";
@@ -15,6 +16,12 @@ export const REVIEW_COURSE_TITLE = "ÍNDIO REVISÃO — Livro de Erros";
 export type ReviewCourseOptions = {
 	version?: number;
 };
+
+export type ReviewItem = ErrorEvent | PrioritizedError;
+
+function isPrioritized(item: ReviewItem): item is PrioritizedError {
+	return "event" in item && "features" in item;
+}
 
 export function dedupeEvents(events: ErrorEvent[]): ErrorEvent[] {
 	const byKey = new Map<string, ErrorEvent>();
@@ -32,23 +39,72 @@ export function dedupeEvents(events: ErrorEvent[]): ErrorEvent[] {
 	return [...byKey.values()];
 }
 
+type ResolvedItem = {
+	event: ErrorEvent;
+	priority?: PrioritizedError;
+	rank: number;
+};
+
+function resolveItems(items: ReviewItem[]): ResolvedItem[] {
+	const prioritized = items.filter(isPrioritized);
+	const rankByKey = new Map<string, number>();
+	const priorityByKey = new Map<string, PrioritizedError>();
+	prioritized.forEach((item, index) => {
+		const key = dedupeKey(item.event);
+		if (!priorityByKey.has(key)) {
+			priorityByKey.set(key, item);
+			rankByKey.set(key, index);
+		}
+	});
+
+	const events = dedupeEvents(items.map((item) => (isPrioritized(item) ? item.event : item)));
+	return events
+		.map((event) => {
+			const key = dedupeKey(event);
+			return { event, priority: priorityByKey.get(key), rank: rankByKey.get(key) ?? Infinity };
+		})
+		.sort((a, b) => {
+			const byMateria = a.event.materia.localeCompare(b.event.materia, "pt-BR");
+			if (byMateria !== 0) return byMateria;
+			if (a.rank !== b.rank) return a.rank - b.rank;
+			return dedupeKey(a.event).localeCompare(dedupeKey(b.event));
+		});
+}
+
+function priorityMetadata(item: PrioritizedError) {
+	const f = item.features;
+	return {
+		priority: item.priority,
+		rule: item.rule,
+		priorityReasons: item.reasons,
+		recurrence: f.recurrence,
+		errorCount: f.errorCount,
+		attemptCount: f.attemptCount,
+		correctAfterLastError: f.correctAfterLastError,
+		errorsAfterCorrect: f.errorsAfterCorrect,
+		lastErrorAt: f.lastErrorAt,
+		daysSinceLastError: f.daysSinceLastError,
+		latestResult: f.latestResult,
+		wrongAnswerPattern: f.wrongAnswerPattern,
+	};
+}
+
 export function buildReviewCourse(
-	events: ErrorEvent[],
+	items: ReviewItem[],
 	options: ReviewCourseOptions = {},
 ): StudyPackage {
-	const unique = dedupeEvents(events).sort((a, b) => {
-		const byMateria = a.materia.localeCompare(b.materia, "pt-BR");
-		return byMateria !== 0 ? byMateria : dedupeKey(a).localeCompare(dedupeKey(b));
-	});
+	const resolved = resolveItems(items);
 
 	const modules: StudyModule[] = [];
 	const questions: QuestionBank = {};
 	const flashcards: FlashcardDeck = [];
 	const lessonContent: Record<string, string> = {};
 	const files: StudyFile[] = [];
+	const priorities: Record<string, ReturnType<typeof priorityMetadata>> = {};
+	let priorityAsOf: string | null = null;
 
-	for (const event of unique) {
-		const { ids, lesson, markdown, question, flashcard } = buildErrorLesson(event);
+	for (const { event, priority } of resolved) {
+		const { ids, lesson, markdown, question, flashcard } = buildErrorLesson(event, priority);
 		let module = modules.find((m) => m.id === ids.moduleId);
 		if (!module) {
 			module = { id: ids.moduleId, title: event.materia, lessons: [] };
@@ -60,6 +116,10 @@ export function buildReviewCourse(
 		flashcards.push(flashcard);
 		lessonContent[ids.lessonPath] = markdown;
 		files.push({ path: ids.lessonPath, data: strToU8(markdown) });
+		if (priority) {
+			priorities[ids.dedupeKey] = priorityMetadata(priority);
+			priorityAsOf ??= priority.features.asOf;
+		}
 	}
 
 	if (modules.length === 0) {
@@ -76,9 +136,10 @@ export function buildReviewCourse(
 			modules,
 			extensions: {
 				indio: {
-					phase: "2B",
-					dedupeKeys: unique.map((e) => dedupeKey(e)),
-					eventIds: unique.map((e) => e.eventId),
+					phase: "2C",
+					dedupeKeys: resolved.map((r) => dedupeKey(r.event)),
+					eventIds: resolved.map((r) => r.event.eventId),
+					...(priorityAsOf ? { priorityAsOf, priorities } : {}),
 				},
 			},
 		},

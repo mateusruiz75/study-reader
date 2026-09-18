@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { errorEventSchema, type ErrorEvent } from "../error-event.ts";
+import type { AttemptRecord, AttemptResult } from "../review-priority.ts";
 
 export const ERROR_RECORDED = "knowledge.error_recorded";
+export const ANSWER_RECORDED = "knowledge.answer_recorded";
 
 const ledgerEntrySchema = z
 	.object({
@@ -15,6 +17,7 @@ const ledgerEntrySchema = z
 		occurredAt: z.string(),
 		date: z.string().optional(),
 		content: z.unknown().optional(),
+		sourceEventId: z.string().nullable().optional(),
 	})
 	.passthrough();
 
@@ -32,10 +35,38 @@ export type SkipReason = "not-error" | "invalid-entry" | "no-content" | "invalid
 
 export type AdaptResult = {
 	events: ErrorEvent[];
+	attempts: AttemptRecord[];
+	latestEventAt: string | null;
 	errorsSeen: number;
+	answersSeen: number;
 	skipped: Record<SkipReason, number>;
 	duplicatesRemoved: number;
 };
+
+export function attemptResult(entry: LedgerEntry): AttemptResult | undefined {
+	if (entry.eventType === ERROR_RECORDED) return "error";
+	if (entry.eventType !== ANSWER_RECORDED) return undefined;
+	const content = contentSchema.safeParse(entry.content);
+	if (content.success && entry.respostaUsuario) {
+		return entry.respostaUsuario === content.data.correctAnswer ? "correct" : "error";
+	}
+	if (/_acertou:/.test(entry.sourceEventId ?? "")) return "correct";
+	if (/_errou:/.test(entry.sourceEventId ?? "")) return "error";
+	return "unknown";
+}
+
+export function toAttempt(entry: LedgerEntry): AttemptRecord | undefined {
+	const result = attemptResult(entry);
+	if (!result) return undefined;
+	return {
+		questionId: entry.questionId,
+		materia: entry.materia,
+		eventId: entry.eventId,
+		occurredAt: entry.occurredAt,
+		result,
+		respostaUsuario: entry.respostaUsuario ?? null,
+	};
+}
 
 export function adaptLedgerEntry(
 	entry: LedgerEntry,
@@ -79,13 +110,22 @@ export function adaptLedger(raw: unknown): AdaptResult {
 		"invalid-event": 0,
 	};
 	const errors: LedgerEntry[] = [];
+	const attempts: AttemptRecord[] = [];
+	let answersSeen = 0;
+	let latestEventAt: string | null = null;
 	for (const item of entries) {
 		const entry = ledgerEntrySchema.safeParse(item);
 		if (!entry.success) {
 			skipped["invalid-entry"]++;
 			continue;
 		}
+		if (latestEventAt === null || entry.data.occurredAt > latestEventAt) {
+			latestEventAt = entry.data.occurredAt;
+		}
+		const attempt = toAttempt(entry.data);
+		if (attempt) attempts.push(attempt);
 		if (entry.data.eventType !== ERROR_RECORDED) {
+			if (entry.data.eventType === ANSWER_RECORDED) answersSeen++;
 			skipped["not-error"]++;
 			continue;
 		}
@@ -119,36 +159,11 @@ export function adaptLedger(raw: unknown): AdaptResult {
 
 	return {
 		events,
+		attempts,
+		latestEventAt,
 		errorsSeen: errors.length,
+		answersSeen,
 		skipped,
 		duplicatesRemoved: usable - latest.size,
 	};
-}
-
-export function selectTechnicalBatch(
-	events: ErrorEvent[],
-	limit = 10,
-	perMateria = 2,
-): ErrorEvent[] {
-	const byMateria = new Map<string, ErrorEvent[]>();
-	for (const event of events) {
-		const list = byMateria.get(event.materia) ?? [];
-		list.push(event);
-		byMateria.set(event.materia, list);
-	}
-	const selected: ErrorEvent[] = [];
-	for (const materia of [...byMateria.keys()].sort((a, b) => a.localeCompare(b, "pt-BR"))) {
-		const newestFirst = byMateria
-			.get(materia)!
-			.sort((a, b) =>
-				a.timestamp !== b.timestamp
-					? b.timestamp.localeCompare(a.timestamp)
-					: b.eventId.localeCompare(a.eventId),
-			);
-		for (const event of newestFirst.slice(0, perMateria)) {
-			if (selected.length >= limit) return selected;
-			selected.push(event);
-		}
-	}
-	return selected;
 }
