@@ -12,6 +12,7 @@ local FocusManager = require("ui/widget/focusmanager")
 local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
+local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
 local Size = require("ui/size")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local TextWidget = require("ui/widget/textwidget")
@@ -62,10 +63,67 @@ function QuizWidget:width()
     return self.dimen.w - 2 * PADDING
 end
 
-function QuizWidget:_populate()
+-- Rebuilds the screen: a fixed TitleBar above a ScrollableContainer holding
+-- the question/feedback/summary body, so long statements and options stay
+-- reachable on any screen size. A new container starts scrolled to the top;
+-- keep_scroll preserves the offset (multiple-choice option toggles).
+function QuizWidget:_populate(keep_scroll)
+    local title_bar = TitleBar:new{
+        title = self.lesson and self.lesson.title or _("Quiz"),
+        width = self:width(),
+        align = "center",
+        close_callback = function() self:onClose() end,
+        show_parent = self,
+    }
+    local body_w = self:width()
+    local body_h = math.max(0, self.dimen.h - 2 * PADDING - title_bar:getHeight())
+
+    local body = self:_buildBody(body_w)
+    if body:getSize().h > body_h then
+        -- Overflow: rebuild narrower so the vertical scrollbar fits beside
+        -- the content (a full-width body would also scroll horizontally).
+        body = self:_buildBody(body_w - ScrollableContainer:getScrollbarWidth())
+    else
+        body = VerticalGroup:new{
+            align = "left",
+            VerticalSpan:new{ width = math.floor((body_h - body:getSize().h) / 2) },
+            body,
+        }
+    end
+
+    local offset = keep_scroll and self.cropping_widget
+        and self.cropping_widget:getScrolledOffset()
+    if self.cropping_widget then
+        self.cropping_widget:onCloseWidget() -- free its compose buffer
+    end
+    -- UIManager clips inner repaints/inverts to self.cropping_widget.
+    self.cropping_widget = ScrollableContainer:new{
+        dimen = Geom:new{ w = body_w, h = body_h },
+        show_parent = self,
+        body,
+    }
+    if offset then
+        self.cropping_widget:setScrolledOffset(offset)
+    end
+
+    self[1] = FrameContainer:new{
+        background = Blitbuffer.COLOR_WHITE,
+        bordersize = 0,
+        margin = 0,
+        padding = PADDING,
+        VerticalGroup:new{
+            align = "left",
+            title_bar,
+            self.cropping_widget,
+        },
+    }
+    self:refocusWidget()
+    UIManager:setDirty(self, "ui")
+end
+
+function QuizWidget:_buildBody(width)
     self.layout = {}
     local group = VerticalGroup:new{ align = "left" }
-    local width = self:width()
 
     local function addText(text, face, bold)
         group[#group + 1] = TextWidget:new{
@@ -111,34 +169,7 @@ function QuizWidget:_populate()
     else
         self:_populateQuestion(group, addText, addWrapped, addSpan, addButton)
     end
-
-    local title_bar = TitleBar:new{
-        title = self.lesson and self.lesson.title or _("Quiz"),
-        width = self.dimen.w - 2 * PADDING,
-        align = "center",
-        close_callback = function() self:onClose() end,
-        show_parent = self,
-    }
-    local filler = math.max(0,
-        self.dimen.h - group:getSize().h - title_bar:getHeight() - 3 * PADDING)
-    local top_filler = math.floor(filler / 2)
-    local full_group = VerticalGroup:new{ align = "left" }
-    full_group[1] = title_bar
-    full_group[2] = VerticalSpan:new{ width = top_filler }
-    for i = 1, #group do
-        full_group[#full_group + 1] = group[i]
-    end
-    full_group[#full_group + 1] = VerticalSpan:new{ width = filler - top_filler }
-
-    self[1] = FrameContainer:new{
-        background = Blitbuffer.COLOR_WHITE,
-        bordersize = 0,
-        margin = 0,
-        padding = PADDING,
-        full_group,
-    }
-    self:refocusWidget()
-    UIManager:setDirty(self, "ui")
+    return group
 end
 
 function QuizWidget:_populateQuestion(group, addText, addWrapped, addSpan, addButton)
@@ -226,7 +257,7 @@ function QuizWidget:onOption(option_id)
         else
             self.selected[option_id] = true
         end
-        self:_populate()
+        self:_populate(true)
     end
 end
 
