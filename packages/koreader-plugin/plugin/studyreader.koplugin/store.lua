@@ -19,6 +19,7 @@ local logger = require("logger")
 local lfs = require("libs/libkoreader-lfs")
 
 local md2xhtml = require("md2xhtml")
+local Present = require("present")
 
 local Store = {}
 
@@ -326,7 +327,7 @@ function Store.questionIdsForLesson(course, lesson)
     return md2xhtml.parseDirectives(markdown).quizzes
 end
 
-local RENDER_LAYOUT = 2
+local RENDER_LAYOUT = 3
 
 local function studyEndBlock(quiz_count, next_lesson)
     local rows = {}
@@ -347,6 +348,39 @@ local function studyEndBlock(quiz_count, next_lesson)
         table.concat(rows, "\n"))
 end
 
+function Store.moduleOfLesson(course, lesson)
+    for _, module in ipairs(course.manifest.modules or {}) do
+        for _, candidate in ipairs(module.lessons or {}) do
+            if candidate.id == lesson.id then return module end
+        end
+    end
+    return nil
+end
+
+local function answerLine(markdown, label)
+    local value = markdown:match("%*%*" .. label .. ":%*%*%s*([^\n]+)")
+    return value and value:match("^%s*(.-)%s*$") or nil
+end
+
+local function lessonPanel(course, lesson, markdown)
+    local module = Store.moduleOfLesson(course, lesson)
+    local assunto = lesson.title:gsub("%s+·%s+Q[^·]*$", "")
+    local key = lesson.id:match("^error%-(.+)$")
+    local statement = answerLine(markdown, "Questão")
+    local panel = Present.lessonPanel({
+        materia = module and module.title or nil,
+        assunto = assunto,
+        question_id = key,
+        meta = Present.lessonMeta(course, lesson),
+        statement = statement,
+        marked = answerLine(markdown, "Resposta marcada"),
+        correct = answerLine(markdown, "Resposta correta"),
+    })
+    local skip = { ["Prioridade"] = true }
+    if statement then skip["O erro"] = true end
+    return panel, skip
+end
+
 function Store.renderLesson(course, lesson)
     local render_dir = course.cache_dir .. "/render-v" .. RENDER_LAYOUT
     if not ensureDir(render_dir) then
@@ -361,7 +395,13 @@ function Store.renderLesson(course, lesson)
     if not markdown then
         return nil, "cannot read lesson content"
     end
-    local parsed = md2xhtml.convert(markdown, lesson.title, "../")
+    local panel, skip_sections = lessonPanel(course, lesson, markdown)
+    local parsed = md2xhtml.convert(markdown, lesson.title, "../", {
+        prepend = panel,
+        extra_css = Present.panelCss(),
+        skip_leading_headings = true,
+        skip_sections = skip_sections,
+    })
     local quiz_count = #parsed.quizzes
     local next_lesson = Store.nextLesson(course, lesson.id)
     local xhtml = parsed.xhtml:gsub("</body>", studyEndBlock(quiz_count, next_lesson) .. "</body>")

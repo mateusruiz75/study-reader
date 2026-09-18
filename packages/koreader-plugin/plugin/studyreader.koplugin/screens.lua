@@ -12,10 +12,14 @@ local UIManager = require("ui/uimanager")
 local logger = require("logger")
 local _ = require("gettext")
 
+local Present = require("present")
 local QuizWidget = require("quiz")
 local ReviewWidget = require("review")
+local SRS = require("srs")
 local State = require("state")
 local Store = require("store")
+
+local ITEMS_PER_PAGE = 8
 
 local Screens = {}
 
@@ -90,14 +94,54 @@ local function openCourse(entry)
     return Store.open(entry.path, entry.mtime)
 end
 
-local function modulePercent(course, state, module)
-    local total, done = 0, 0
+local function moduleStats(state, module)
+    local stats = { lessons = 0, done = 0 }
     for _, lesson in ipairs(module.lessons) do
-        total = total + 1
-        if State.completedLesson(state, lesson.id) then done = done + 1 end
+        stats.lessons = stats.lessons + 1
+        if State.completedLesson(state, lesson.id) then stats.done = stats.done + 1 end
     end
-    if total == 0 then return "0%" end
-    return string.format("%d%%", math.floor(done * 100 / total))
+    return stats
+end
+
+local function dueCount(course, state)
+    local due = 0
+    for _, card in ipairs(Store.getFlashcards(course)) do
+        if SRS.isDue(state.reviews[card.id] or SRS.newCard()) then due = due + 1 end
+    end
+    return due
+end
+
+local function quizStats(course, state, lesson)
+    local ids = Store.questionIdsForLesson(course, lesson)
+    local quiz = { total = #ids, answered = 0, correct = nil }
+    local all_correct = #ids > 0
+    for _, id in ipairs(ids) do
+        local answer = state.answers[id]
+        if answer then
+            quiz.answered = quiz.answered + 1
+            if answer.correct ~= true then all_correct = false end
+        else
+            all_correct = false
+        end
+    end
+    if quiz.answered > 0 and quiz.answered == #ids then quiz.correct = all_correct end
+    return quiz
+end
+
+local function courseStats(course, state)
+    local stats = { modules = 0, lessons = 0, done = 0, quizzes = 0, answered = 0, due = dueCount(course, state) }
+    for _, module in ipairs(Store.modules(course)) do
+        stats.modules = stats.modules + 1
+        local m = moduleStats(state, module)
+        stats.lessons = stats.lessons + m.lessons
+        stats.done = stats.done + m.done
+        for _, lesson in ipairs(module.lessons) do
+            local quiz = quizStats(course, state, lesson)
+            stats.quizzes = stats.quizzes + quiz.total
+            stats.answered = stats.answered + quiz.answered
+        end
+    end
+    return stats
 end
 
 function Screens.myCourses()
@@ -106,22 +150,19 @@ function Screens.myCourses()
         warn(_("No .study courses found. Copy them to a 'study' folder inside your documents directory."))
         return
     end
+    local last = State.getLastCourse()
     local items = {}
+    local total_due = 0
     for _, entry in ipairs(courses) do
         local course, err = openCourse(entry)
         if course then
             local state = State.load(course.id)
-            local total, done = 0, 0
-            for _, lesson in ipairs(Store.lessons(course)) do
-                total = total + 1
-                if State.completedLesson(state, lesson.id) then done = done + 1 end
-            end
-            local pct = total > 0 and string.format("%d%%", math.floor(done * 100 / total)) or "0%"
-            items[#items + 1] = {
-                text = course.manifest.title or entry.name,
-                mandatory = pct,
-                callback = function() Screens.courseMenu(course) end,
-            }
+            local stats = courseStats(course, state)
+            stats.active = last ~= nil and last.courseId == course.id
+            total_due = total_due + stats.due
+            local item = Present.courseItem(course.manifest.title or entry.name, stats)
+            item.callback = function() Screens.courseMenu(course) end
+            items[#items + 1] = item
         else
             logger.warn("studyreader: cannot open course", entry.path, err)
             items[#items + 1] = {
@@ -131,66 +172,58 @@ function Screens.myCourses()
             }
         end
     end
+    local subtitle = string.format(_("%d courses"), #courses)
+    if total_due > 0 then
+        subtitle = subtitle .. string.format(_(" · %d reviews due"), total_due)
+    end
     pushMenu({
         title = _("My courses"),
+        subtitle = subtitle,
         item_table = items,
+        items_per_page = ITEMS_PER_PAGE,
     })
 end
 
 function Screens.courseMenu(course)
     local state = State.load(course.id)
-
-    local due = 0
-    local deck = Store.getFlashcards(course)
-    if #deck > 0 then
-        local SRS = require("srs")
-        for _, card in ipairs(deck) do
-            local schedule = state.reviews[card.id] or SRS.newCard()
-            if SRS.isDue(schedule) then due = due + 1 end
-        end
-    end
+    local stats = courseStats(course, state)
 
     local items = {}
-    if #deck > 0 then
-        items[#items + 1] = {
-            text = string.format(_("Reviews (%d due)"), due),
-            callback = function() Screens.startReviews(course) end,
-        }
-        items[#items + 1] = { text = "—", select_enabled = false, separator = true }
+    if #Store.getFlashcards(course) > 0 then
+        local reviews = Present.reviewsItem(stats.due)
+        reviews.separator = true
+        reviews.callback = function() Screens.startReviews(course) end
+        items[#items + 1] = reviews
     end
     for _, module in ipairs(Store.modules(course)) do
-        items[#items + 1] = {
-            text = module.title,
-            mandatory = modulePercent(course, state, module),
-            callback = function() Screens.moduleMenu(course, module) end,
-        }
+        local item = Present.moduleItem(module.title, moduleStats(state, module), Present.priorityCounts(course, module))
+        item.callback = function() Screens.moduleMenu(course, module) end
+        items[#items + 1] = item
     end
 
     pushChildMenu({
         title = course.manifest.title or course.id,
+        subtitle = Present.courseSubtitle(stats),
         item_table = items,
+        items_per_page = ITEMS_PER_PAGE,
     })
 end
 
 function Screens.moduleMenu(course, module)
     local state = State.load(course.id)
     local items = {}
+    local stats = moduleStats(state, module)
     for _, lesson in ipairs(module.lessons) do
-        local ids = Store.questionIdsForLesson(course, lesson)
-        local answered = 0
-        for _, id in ipairs(ids) do
-            if State.answeredQuestion(state, id) then answered = answered + 1 end
-        end
-        local mark = State.completedLesson(state, lesson.id) and "✓ " or ""
-        items[#items + 1] = {
-            text = mark .. lesson.title,
-            mandatory = #ids > 0 and string.format("%d/%d", answered, #ids) or nil,
-            callback = function() Screens.openLesson(course, lesson) end,
-        }
+        local item = Present.lessonItem(lesson, State.completedLesson(state, lesson.id),
+            quizStats(course, state, lesson), Present.lessonMeta(course, lesson))
+        item.callback = function() Screens.openLesson(course, lesson) end
+        items[#items + 1] = item
     end
     pushChildMenu({
         title = module.title,
+        subtitle = string.format("%d/%d aulas · %s", stats.done, stats.lessons, Present.percentText(stats.done, stats.lessons)),
         item_table = items,
+        items_per_page = ITEMS_PER_PAGE,
     })
 end
 

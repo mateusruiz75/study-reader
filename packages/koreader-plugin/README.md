@@ -21,6 +21,9 @@ plugin/studyreader.koplugin/
   main.lua       WidgetContainer + main-menu wiring ("Study" entry)
   store.lua      course discovery, .study (ZIP) reading via ffi/archiver, lesson rendering
   md2xhtml.lua   Markdown subset → standalone XHTML for crengine
+  present.lua    pure presentation layer: menu item texts, [PRIORITY]/[SIGNAL]
+                 badges and the lesson review panel (no KOReader deps)
+  screens.lua    My courses / course / module menus and navigation flows
   quiz.lua       quiz widget (single/multiple choice + feedback)
   review.lua     flashcard review widget (SM-2 grading)
   srs.lua        SM-2 scheduler
@@ -28,6 +31,29 @@ plugin/studyreader.koplugin/
 tests/run.lua    standalone luajit tests for the pure modules
 deploy.sh        SSH deploy to a device
 ```
+
+## Visual layer
+
+Menus are KOReader `Menu` widgets, so item text is a single flowing string
+(the widget strips newlines). The presentation rules live in `present.lua`:
+
+- My courses: `title — done/total aulas · N reviews · status`, `%` on the right
+  (dimmed at 100%), the last studied course in bold, a subtitle with the
+  totals.
+- Course: subtitle with modules/lessons/quizzes/reviews; `Reviews — …` in bold
+  when something is due; one row per module with progress and the priority
+  counts read from `manifest.extensions.indio.priorities`.
+- Module: `✓`/`○` + `[CRITICAL|HIGH|MEDIUM|LOW]` + `[LAPSING|DUE|LEARNING|STABLE]`
+  (`UNSEEN` is the default and is not badged in lists) + title + `erro há N dias`;
+  the right column shows `✓ 1/1`, `✗ 1/1` or a dimmed `0/1` from the quiz state.
+- Lesson: `store.renderLesson` prepends a review panel (`Present.lessonPanel`)
+  with materia · Qid, assunto, badges, statement, marked answer (struck
+  through), correct answer (bold) and the priority reasons, and skips the
+  markdown sections it replaces (`O erro`, `Prioridade`). Rendered pages are
+  cached per `RENDER_LAYOUT`; bump it when the layout changes.
+
+Everything shown comes from the package manifest and the student state —
+nothing is inferred.
 
 ## Deploy to a device
 

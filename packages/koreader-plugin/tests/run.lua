@@ -393,6 +393,136 @@ check("quiz: multiple-choice toggles keep the scroll position", function()
 	end)
 end)
 
+local Present = dofile(plugin .. "present.lua")
+
+local function sampleCourse()
+	return {
+		id = "indio-revisao",
+		manifest = {
+			title = "ÍNDIO REVISÃO — Livro de Erros",
+			modules = {
+				{ id = "trib", title = "Direito Tributário", lessons = {
+					{ id = "error-111", title = "Competência · Q111", content = "content/error-111.md" },
+					{ id = "error-222", title = "Imunidades · Q222", content = "content/error-222.md" },
+				} },
+				{ id = "cont", title = "Contabilidade Geral", lessons = {
+					{ id = "error-333", title = "Ativo · Q333", content = "content/error-333.md" },
+				} },
+			},
+			extensions = { indio = { priorities = {
+				["111"] = { priority = "CRITICAL", rule = "relapse-unrecovered", errorCount = 3, daysSinceLastError = 2,
+					priorityReasons = { "voltou a errar após acerto, sem recuperação consistente", "3 erros registrados" },
+					study = { signal = "LAPSING", reviewLapses = 1 } },
+				["222"] = { priority = "HIGH", errorCount = 2, daysSinceLastError = 10, priorityReasons = { "erro recorrente" } },
+			} } },
+		},
+	}
+end
+
+check("present: progress bar and badges are deterministic and never invent data", function()
+	assert(Present.bar(0, 10, 10) == string.rep("░", 10), "empty bar")
+	assert(Present.bar(3, 10, 10) == string.rep("█", 3) .. string.rep("░", 7), "3/10 bar")
+	assert(Present.bar(10, 10, 10) == string.rep("█", 10), "full bar")
+	assert(Present.bar(1, 0, 10) == string.rep("░", 10), "zero total")
+	assert(Present.priorityBadge("CRITICAL") == "[CRITICAL]", "priority badge")
+	assert(Present.priorityBadge("weird") == nil and Present.priorityBadge(nil) == nil, "unknown priority")
+	assert(Present.signalBadge("LAPSING") == "[LAPSING]" and Present.signalBadge("nope") == nil, "signal badge")
+end)
+
+check("present: lesson metadata comes only from the manifest priorities", function()
+	local course = sampleCourse()
+	local meta = Present.lessonMeta(course, course.manifest.modules[1].lessons[1])
+	assert(meta and meta.key == "111" and meta.priority == "CRITICAL" and meta.signal == "LAPSING", "meta 111")
+	assert(#meta.reasons == 2, "reasons carried")
+	local partial = Present.lessonMeta(course, course.manifest.modules[1].lessons[2])
+	assert(partial.priority == "HIGH" and partial.signal == nil, "no signal when absent")
+	assert(Present.lessonMeta(course, course.manifest.modules[2].lessons[1]) == nil, "unknown lesson → nil")
+	assert(Present.lessonMeta({ manifest = {} }, { id = "error-111" }) == nil, "course without priorities → nil")
+end)
+
+check("present: course, module and lesson menu items carry a readable second line", function()
+	local item = Present.courseItem("ÍNDIO REVISÃO — Livro de Erros",
+		{ lessons = 30, done = 2, quizzes = 30, answered = 4, due = 29, active = true })
+	assert(item.text:match("^ÍNDIO REVISÃO — Livro de Erros  —  "), "title first, meta after (Menu strips newlines)")
+	assert(item.text:match("2/30 aulas"), "lesson progress")
+	assert(item.text:match("29 reviews"), "due reviews")
+	assert(not item.text:match("\n"), "no newline in menu text")
+	assert(item.mandatory == "6%", "percent")
+	assert(item.bold == true, "active course is bold")
+	local finished = Present.courseItem("INDIO Error Test", { lessons = 1, done = 1, quizzes = 1, answered = 1, due = 0, active = false })
+	assert(finished.mandatory == "100%" and finished.mandatory_dim == true and not finished.bold, "finished course is dimmed")
+	assert(finished.text:match("concluído"), "finished status")
+
+	local module = Present.moduleItem("Direito Tributário", { lessons = 6, done = 1 }, { CRITICAL = 5, HIGH = 1 })
+	assert(module.text:match("^Direito Tributário  —  1/6 aulas"), "module title and progress")
+	assert(module.text:match("5 CRITICAL") and module.text:match("1 HIGH"), "module priority counts")
+	assert(module.mandatory == "16%", "module percent")
+
+	local reviews = Present.reviewsItem(29)
+	assert(reviews.text:match("^Reviews  —  29 flashcards") and reviews.mandatory == "29 due" and reviews.bold, "reviews item")
+	assert(Present.reviewsItem(0).bold == false, "no due → not bold")
+
+	local course = sampleCourse()
+	local lesson = Present.lessonItem(course.manifest.modules[1].lessons[1], true,
+		{ total = 1, answered = 1, correct = false }, Present.lessonMeta(course, course.manifest.modules[1].lessons[1]))
+	assert(lesson.text:match("^✓ %[CRITICAL%] %[LAPSING%] Competência · Q111"), "mark and badges lead the title")
+	local unseen = Present.lessonItem({ id = "error-9", title = "T · Q9" }, false, nil, { priority = "MEDIUM", signal = "UNSEEN", reasons = {} })
+	assert(unseen.text == "○ [MEDIUM] T · Q9", "UNSEEN is the default state and is not badged in lists")
+	assert(lesson.text:match("erro há 2 dias"), "recency from metadata")
+	assert(lesson.mandatory == "✗ 1/1", "wrong quiz in the right column")
+	local pending = Present.lessonItem(course.manifest.modules[2].lessons[1], false, { total = 1, answered = 0 }, nil)
+	assert(pending.text == "○ Ativo · Q333", "pending lesson without metadata")
+	assert(pending.mandatory == "0/1" and pending.mandatory_dim == true, "pending quiz dimmed")
+	local right = Present.lessonItem(course.manifest.modules[1].lessons[2], true, { total = 1, answered = 1, correct = true },
+		Present.lessonMeta(course, course.manifest.modules[1].lessons[2]))
+	assert(right.text:match("^✓ %[HIGH%] Imunidades") and right.mandatory == "✓ 1/1", "correct quiz")
+end)
+
+check("present: lesson panel renders a review header with badges and answers", function()
+	local course = sampleCourse()
+	local html = Present.lessonPanel({
+		materia = "Direito Tributário",
+		assunto = "Competência",
+		question_id = "111",
+		meta = Present.lessonMeta(course, course.manifest.modules[1].lessons[1]),
+		statement = "Enunciado da questão sintética.",
+		marked = "D) alternativa marcada",
+		correct = "B) alternativa correta",
+		quiz = { answered = true, correct = false },
+	})
+	assert(html:match('class="sr%-statement"') and html:match("Enunciado da questão sintética%."), "statement in panel")
+	assert(html:match('class="sr%-panel"'), "panel container")
+	assert(html:match("Direito Tributário") and html:match("Competência"), "materia/assunto")
+	assert(html:match("Q111"), "question id")
+	assert(html:match('class="sr%-badge sr%-p%-critical"') and html:match(">CRITICAL<"), "priority badge class")
+	assert(html:match('class="sr%-badge sr%-s%-lapsing"') and html:match(">LAPSING<"), "signal badge class")
+	assert(html:match("alternativa marcada") and html:match("alternativa correta"), "answers")
+	assert(html:match("3 erros registrados"), "reasons listed")
+	assert(html:match("quiz") and html:match("errado"), "quiz status")
+	local bare = Present.lessonPanel({ materia = "X", assunto = nil, question_id = nil, meta = nil })
+	assert(bare:match('class="sr%-panel"') and not bare:match("sr%-badge"), "panel without metadata has no badges")
+	assert(Present.panelCss():match("%.sr%-badge"), "css exported")
+end)
+
+check("md2xhtml accepts a prepended panel, extra css and skips leading title headings", function()
+	local md = "# Matéria\n\n## Assunto\n\n### O erro\n\nTexto.\n"
+	local out = md2xhtml.convert(md, "T", "", { prepend = '<div class="sr-panel">P</div>', extra_css = ".sr-panel{}", skip_leading_headings = true })
+	assert(out.xhtml:match('<div class="sr%-panel">P</div>'), "prepended panel")
+	assert(out.xhtml:match("%.sr%-panel{}"), "extra css")
+	assert(not out.xhtml:match("<h1") and not out.xhtml:match("<h2"), "leading h1/h2 skipped")
+	assert(out.xhtml:match("<h3[^>]*>O erro</h3>"), "h3 kept")
+	local plain = md2xhtml.convert(md, "T")
+	assert(plain.xhtml:match("<h1"), "default keeps headings")
+
+	local with_priority = table.concat({
+		"# M", "", "### O erro", "", "Texto.", "", "### Prioridade", "", "**HIGH**", "", "- razão 1", "",
+		"### Explicação", "", "Fim.", "",
+	}, "\n")
+	local skipped = md2xhtml.convert(with_priority, "T", "", { skip_sections = { ["Prioridade"] = true } })
+	assert(not skipped.xhtml:match("Prioridade") and not skipped.xhtml:match("razão 1"), "priority section skipped")
+	assert(skipped.xhtml:match("O erro") and skipped.xhtml:match("Explicação") and skipped.xhtml:match("Fim%."), "other sections kept")
+end)
+
 if failures > 0 then
 	print(string.format("\n%d failure(s)", failures))
 	os.exit(1)

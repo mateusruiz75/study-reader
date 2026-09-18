@@ -156,12 +156,25 @@ end
 
 local DIRECTIVE_STYLE = "color:#555;background-color:#eee;padding:0.3em 0.6em;display:block;margin:0.6em 0"
 
-function md2xhtml.convert(markdown, title, image_prefix)
+function md2xhtml.convert(markdown, title, image_prefix, options)
     image_prefix = image_prefix or ""
+    options = options or {}
     local body = {}
+    local leading = options.skip_leading_headings == true
+    local skip_sections = options.skip_sections or {}
+    local skipping = false
     for _, block in ipairs(splitBlocks(markdown)) do
         local directive = directiveOf(block)
-        if directive then
+        local heading_level = block[1]:match("^%s*(#+)%s+")
+        if heading_level then
+            local heading_text = block[1]:match("^%s*#+%s+(.-)%s*$")
+            skipping = skip_sections[heading_text] == true
+        end
+        if skipping then
+            -- section already presented by the review panel
+        elseif leading and heading_level and #heading_level <= 2 then
+            -- the review panel already shows materia/assunto; drop the title headings
+        elseif directive then
             if directive.kind == "quiz" then
                 body[#body + 1] = string.format(
                     '<div style="%s">&#9670; Quiz — answer it from the Study menu</div>',
@@ -181,7 +194,8 @@ function md2xhtml.convert(markdown, title, image_prefix)
             body[#body + 1] = string.format(
                 '<pre style="background-color:#f0f0f0;padding:0.5em;font-size:0.85em"><code>%s</code></pre>',
                 escapeXml(table.concat(code, "\n")))
-        elseif block[1]:match("^%s*(#+)%s+") then
+        elseif heading_level then
+            leading = false
             local _, _, marks, text = block[1]:find("^%s*(#+)%s+(.+)$")
             local level = math.min(#marks, 6)
             body[#body + 1] = string.format(
@@ -210,6 +224,10 @@ function md2xhtml.convert(markdown, title, image_prefix)
                 .. inlineFormat(table.concat(paragraph, " "))
                 .. "</p>"
         end
+        if not heading_level then leading = false end
+    end
+    if options.prepend then
+        table.insert(body, 1, options.prepend)
     end
 
     return {
@@ -223,6 +241,7 @@ function md2xhtml.convert(markdown, title, image_prefix)
             '<style type="text/css">',
             "body { margin: 0.2em 0.3em; line-height: 1.35 }",
             "p { margin: 0.35em 0; text-indent: 0 }",
+            options.extra_css or "",
             "</style>",
             "</head>",
             "<body>",
