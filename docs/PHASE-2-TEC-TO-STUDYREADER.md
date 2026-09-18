@@ -343,6 +343,61 @@ interno. O hash do ZIP muda entre execuções porque `buildStudy` grava o
 horário corrente como mtime de cada entrada. É equivalência lógica, não
 byte-a-byte.
 
+## PHASE 2B — Caderno de Erros → INDIO REVISÃO
+
+Fonte real: o ledger do projection `obsidian-error-notebook-v1`, fonte
+canônica do Caderno de Erros. As notas `.md` do caderno são projeções
+derivadas dele. Fica em
+`<vault>/99 - Sistema/Eventos/Checkpoints/obsidian-error-notebook-v1/ledger.json`:
+um array JSON de eventos `knowledge.error_recorded` e
+`knowledge.answer_recorded`. O builder só **lê** o ledger; nenhum dado dele é
+versionado neste repositório.
+
+Mapeamento (`packages/study-format/scripts/adapters/error-notebook-ledger.ts`):
+
+| Ledger | `ErrorEvent` |
+| --- | --- |
+| `eventId` | `eventId` |
+| `occurredAt` | `timestamp` |
+| — | `source: "tec"` |
+| `materia` / `assunto` | `materia` / `assunto` |
+| `questionId` | `questionId` |
+| `content.statement` | `enunciado` |
+| `content.alternatives[].label/text` | `alternativas[].id/text` |
+| `respostaUsuario` | `respostaMarcada` |
+| `content.correctAnswer` | `respostaCorreta` |
+| nº de `error_recorded` do mesmo `questionId` | `recorrencia` |
+| entrada original | `raw` |
+| inexistente no ledger | `banca`, `ano`, `notebookId`, `explicacaoOriginal` = `null` |
+
+Regras:
+
+- Só `knowledge.error_recorded` com `content` completo (enunciado, ≥ 2
+  alternativas, gabarito) vira `ErrorEvent`. O resto é contado e descartado.
+- Dedupe determinístico por `questionId`: fica a ocorrência mais recente
+  (`occurredAt`, desempate por `eventId`). `recorrencia` conta todas as
+  ocorrências de erro, inclusive as sem conteúdo.
+- Lote técnico (não é priorização): matérias em ordem alfabética, até 2 erros
+  por matéria, os mais recentes primeiro, até 10 no total.
+- Curso: `manifest.id = indio-revisao`, título "ÍNDIO REVISÃO — Livro de
+  Erros". Um módulo por matéria e uma aula, um quiz e um flashcard por erro,
+  todos via `buildErrorLesson()` da 2A. Os ids derivam do `questionId`.
+  `version` é explícita (`--version`, padrão 1), para o build ser
+  determinístico.
+
+Comando:
+
+```
+INDIO_LEDGER="<vault>/99 - Sistema/Eventos/Checkpoints/obsidian-error-notebook-v1/ledger.json" pnpm study:build-review
+```
+
+ou `pnpm study:build-review <ledger.json> [output.study] [--limit 10] [--per-materia 2] [--version 1]`.
+Saída padrão: `examples/INDIO-REVISAO.study`, ignorado pelo git.
+
+Os testes (`tests/review-course.test.ts`) usam uma fixture no formato do ledger
+montada com as questões já versionadas em `courses/indio-fiscal` e uma entrada
+sintética explicitamente marcada.
+
 ## Sequência das fases
 
 | Fase | Entrega |

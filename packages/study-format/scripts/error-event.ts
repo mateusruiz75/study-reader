@@ -4,7 +4,10 @@ import {
 	FORMAT_VERSION,
 	flashcardDirective,
 	quizDirective,
+	type StudyFlashcard,
+	type StudyLesson,
 	type StudyPackage,
+	type StudyQuestion,
 } from "../src/index.ts";
 
 const optionIdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/).max(32);
@@ -108,14 +111,52 @@ export function renderErrorLesson(event: ErrorEvent): string {
 	return `${sections.join("\n\n")}\n`;
 }
 
+export type ErrorLesson = {
+	ids: ReturnType<typeof errorCourseIds>;
+	lesson: StudyLesson;
+	markdown: string;
+	question: StudyQuestion;
+	flashcard: StudyFlashcard;
+};
+
+export function buildErrorLesson(event: ErrorEvent): ErrorLesson {
+	const ids = errorCourseIds(event);
+	const correct = describeAnswer(event, event.respostaCorreta);
+	const questionLabel = event.questionId ?? event.eventId;
+
+	return {
+		ids,
+		lesson: {
+			id: ids.lessonId,
+			title: event.assunto ?? event.materia,
+			content: ids.lessonPath,
+		},
+		markdown: renderErrorLesson(event),
+		question: {
+			type: event.respostaCorreta.length === 1 ? "single-choice" : "multiple-choice",
+			question: event.enunciado,
+			options: event.alternativas,
+			correct: event.respostaCorreta,
+			...(event.explicacaoOriginal
+				? { explanation: event.explicacaoOriginal }
+				: {}),
+		},
+		flashcard: {
+			id: ids.flashcardId,
+			front: `Na questão ${questionLabel}, qual era a resposta correta?`,
+			back: event.explicacaoOriginal
+				? `${correct} — ${event.explicacaoOriginal}`
+				: correct,
+			tags: ["erro", ids.dedupeKey],
+		},
+	};
+}
+
 export function buildErrorCourse(
 	event: ErrorEvent,
 	options: ErrorCourseOptions = {},
 ): StudyPackage {
-	const ids = errorCourseIds(event);
-	const lesson = renderErrorLesson(event);
-	const correct = describeAnswer(event, event.respostaCorreta);
-	const questionLabel = event.questionId ?? event.eventId;
+	const { ids, lesson, markdown, question, flashcard } = buildErrorLesson(event);
 
 	return {
 		manifest: {
@@ -124,19 +165,7 @@ export function buildErrorCourse(
 			version: 1,
 			title: options.title ?? DEFAULT_COURSE_TITLE,
 			language: "pt-BR",
-			modules: [
-				{
-					id: ids.moduleId,
-					title: event.materia,
-					lessons: [
-						{
-							id: ids.lessonId,
-							title: event.assunto ?? event.materia,
-							content: ids.lessonPath,
-						},
-					],
-				},
-			],
+			modules: [{ id: ids.moduleId, title: event.materia, lessons: [lesson] }],
 			extensions: {
 				indio: {
 					phase: "2A",
@@ -146,28 +175,9 @@ export function buildErrorCourse(
 				},
 			},
 		},
-		questions: {
-			[ids.questionId]: {
-				type: event.respostaCorreta.length === 1 ? "single-choice" : "multiple-choice",
-				question: event.enunciado,
-				options: event.alternativas,
-				correct: event.respostaCorreta,
-				...(event.explicacaoOriginal
-					? { explanation: event.explicacaoOriginal }
-					: {}),
-			},
-		},
-		flashcards: [
-			{
-				id: ids.flashcardId,
-				front: `Na questão ${questionLabel}, qual era a resposta correta?`,
-				back: event.explicacaoOriginal
-					? `${correct} — ${event.explicacaoOriginal}`
-					: correct,
-				tags: ["erro", ids.dedupeKey],
-			},
-		],
-		lessonContent: { [ids.lessonPath]: lesson },
-		files: [{ path: ids.lessonPath, data: strToU8(lesson) }],
+		questions: { [ids.questionId]: question },
+		flashcards: [flashcard],
+		lessonContent: { [ids.lessonPath]: markdown },
+		files: [{ path: ids.lessonPath, data: strToU8(markdown) }],
 	};
 }
