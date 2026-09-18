@@ -7,7 +7,7 @@ import {
 	DeployError,
 	STATE_FILES,
 	deployReview,
-	requireDevice,
+	findDevice,
 	validateReviewPackage,
 	type DeployIO,
 	type DeployReport,
@@ -56,6 +56,7 @@ export type RefreshOptions = {
 	ledgerPath: string | undefined;
 	dryRun: boolean;
 	restartKoreader: boolean;
+	allowDeviceOffline?: boolean;
 	limit: number;
 	maxPerMateria: number;
 	asOf?: string;
@@ -89,7 +90,7 @@ export type DeltaEntry = {
 
 export type RefreshDelta = { entered: DeltaEntry[]; left: DeltaEntry[]; stayed: string[] };
 
-export type RefreshResult = "NO_CHANGE" | "DEPLOYED" | "DRY_RUN" | "FAILED";
+export type RefreshResult = "NO_CHANGE" | "DEPLOYED" | "DRY_RUN" | "SKIPPED_DEVICE_OFFLINE" | "FAILED";
 
 export type RefreshReport = {
 	runId: string;
@@ -320,7 +321,18 @@ export async function refreshReview(options: RefreshOptions, io: RefreshIO): Pro
 
 	try {
 		step("validate-device");
-		const device = await requireDevice(io.adb, serial, (message) => new RefreshError(message));
+		const device = await findDevice(io.adb, serial, (message) => new RefreshError(message));
+		if (!device) {
+			if (!options.allowDeviceOffline) throw new RefreshError(`device ${serial} is not connected (or not authorized)`);
+			report.result = "SKIPPED_DEVICE_OFFLINE";
+			report.error = `device ${serial} is not connected (or not authorized); nothing was synced, built or deployed`;
+			step("report");
+			report.finishedAt = io.now().toISOString();
+			await writeReport(report, options, io);
+			await io.remove(options.lockPath);
+			step("unlock");
+			return report;
+		}
 		report.deviceModel = device.model;
 
 		step("sync-feedback");

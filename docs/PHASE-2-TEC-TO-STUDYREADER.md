@@ -689,7 +689,8 @@ reporta `WOULD DEPLOY` ou `NO CHANGE`. `--restart-koreader` só reinicia após
 `DRY_RUN` ou `FAILED`. Campos de conteúdo do report são determinísticos para o
 mesmo ledger + snapshot + `as-of`; só `runId`, timestamps e caminhos variam.
 
-Fora desta fase: cron/agendamento.
+`--allow-device-offline` (Phase 4): device ausente → `SKIPPED_DEVICE_OFFLINE`
+(exit 3) sem sync, build ou deploy; ver `docs/INDIO-STUDYREADER-DAILY-RUN.md`.
 
 ## Sequência das fases
 
@@ -701,3 +702,4 @@ Fora desta fase: cron/agendamento.
 | **2D** | Deploy seguro via `adb -s` (dry-run, backup, temp + rename, SHA-256, NO CHANGE) |
 | **2E** | Feedback do StudyReader (read-only) como desempate dentro da banda |
 | **3** | `study:refresh-review`: sync → prioridade → build → deploy seguro → report, com lock |
+| **4** | Rotina diária Windows: wrapper + Task Scheduler 06:00, `SKIPPED_DEVICE_OFFLINE` (`docs/INDIO-STUDYREADER-DAILY-RUN.md`) |

@@ -128,11 +128,11 @@ function backupStamp(now: Date): string {
 
 export type ConnectedDevice = { serial: string; model: string | null };
 
-export async function requireDevice(
+export async function findDevice(
 	adb: AdbRunner,
 	serial: string,
 	fail: (message: string) => Error = (message) => new DeployError(message),
-): Promise<ConnectedDevice> {
+): Promise<ConnectedDevice | null> {
 	const devices = await adb(["devices", "-l"]);
 	if (devices.code !== 0) throw fail(`adb devices failed: ${(devices.stderr || devices.stdout).trim()}`);
 	for (const line of devices.stdout.split("\n")) {
@@ -142,7 +142,17 @@ export async function requireDevice(
 			return { serial, model };
 		}
 	}
-	throw fail(`device ${serial} is not connected (or not authorized)`);
+	return null;
+}
+
+export async function requireDevice(
+	adb: AdbRunner,
+	serial: string,
+	fail: (message: string) => Error = (message) => new DeployError(message),
+): Promise<ConnectedDevice> {
+	const device = await findDevice(adb, serial, fail);
+	if (!device) throw fail(`device ${serial} is not connected (or not authorized)`);
+	return device;
 }
 
 export async function deployReview(options: DeployOptions, io: DeployIO): Promise<DeployReport> {

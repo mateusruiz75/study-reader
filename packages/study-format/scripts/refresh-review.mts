@@ -9,6 +9,8 @@ import { priorityProfileSchema } from "./review-priority.ts";
 
 const execFileAsync = promisify(execFile);
 
+export const EXIT_SKIPPED_DEVICE_OFFLINE = 3;
+
 const argv = process.argv.slice(2);
 if (argv[0] === "--") argv.shift();
 
@@ -20,6 +22,7 @@ const { values } = parseArgs({
 		adb: { type: "string" },
 		"dry-run": { type: "boolean", default: false },
 		"restart-koreader": { type: "boolean", default: false },
+		"allow-device-offline": { type: "boolean", default: false },
 		limit: { type: "string", default: String(DEFAULT_REFRESH_OPTIONS.limit) },
 		"max-per-materia": { type: "string", default: String(DEFAULT_REFRESH_OPTIONS.maxPerMateria) },
 		"as-of": { type: "string" },
@@ -35,7 +38,7 @@ const adbPath = values.adb ?? process.env.ADB ?? "adb";
 function usage(message: string): never {
 	console.error(`error: ${message}`);
 	console.error(
-		"usage: refresh-review.mts --serial <serial | $INDIO_TABLET_SERIAL> [--dry-run] [--restart-koreader] [--ledger <ledger.json | $INDIO_LEDGER>] [--adb <path | $ADB>] [--limit 30] [--max-per-materia 6] [--as-of ISO] [--profile profile.json]",
+		"usage: refresh-review.mts --serial <serial | $INDIO_TABLET_SERIAL> [--dry-run] [--restart-koreader] [--allow-device-offline] [--ledger <ledger.json | $INDIO_LEDGER>] [--adb <path | $ADB>] [--limit 30] [--max-per-materia 6] [--as-of ISO] [--profile profile.json]",
 	);
 	process.exit(1);
 }
@@ -82,6 +85,7 @@ try {
 			ledgerPath: resolve(ledgerPath),
 			dryRun: values["dry-run"],
 			restartKoreader: values["restart-koreader"],
+			allowDeviceOffline: values["allow-device-offline"],
 			limit: Number(values.limit),
 			maxPerMateria: Number(values["max-per-materia"]),
 			asOf: values["as-of"],
@@ -97,6 +101,7 @@ try {
 		io,
 	);
 	printReport(report);
+	if (report.result === "SKIPPED_DEVICE_OFFLINE") process.exit(EXIT_SKIPPED_DEVICE_OFFLINE);
 } catch (error) {
 	if (error instanceof RefreshError) {
 		console.error(`❌ REFRESH ABORTED: ${error.message}`);
@@ -106,7 +111,8 @@ try {
 }
 
 function printReport(report: RefreshReport): void {
-	const icon = report.result === "DEPLOYED" ? "✅" : report.result === "NO_CHANGE" ? "⏸" : report.result === "DRY_RUN" ? "🧪" : "❌";
+	const icon =
+		report.result === "DEPLOYED" ? "✅" : report.result === "NO_CHANGE" ? "⏸" : report.result === "DRY_RUN" ? "🧪" : report.result === "SKIPPED_DEVICE_OFFLINE" ? "⏭" : "❌";
 	console.log(`${icon} ${report.result} (${report.deploymentStatus})`);
 	console.log(`   run: ${report.runId} · report: ${report.reportDir}/report.json`);
 	console.log(`   device: ${report.serial} (${report.deviceModel ?? "?"})`);

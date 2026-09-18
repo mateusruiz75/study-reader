@@ -466,6 +466,53 @@ describe("phase 3: daily closed loop", () => {
 		}
 	});
 
+	it("skips safely when the device is offline and --allow-device-offline is set", async () => {
+		const { io, calls, local } = world(null);
+		const steps: string[] = [];
+
+		const report = await refreshReview(options({ allowDeviceOffline: true, onStep: (s) => steps.push(s) }), io);
+
+		expect(report.result).toBe("SKIPPED_DEVICE_OFFLINE");
+		expect(report.deploymentStatus).toBe("NOT REACHED");
+		expect(report.feedbackSnapshot).toBeNull();
+		expect(report.ledgerSha).toBeNull();
+		expect(steps).toEqual(["validate-args", "lock", "validate-device", "report", "unlock"]);
+		expect(calls.map((c) => c[0])).toEqual(["devices"]);
+		expect([...local.keys()].some((k) => k.startsWith(FEEDBACK_ROOT) || k.startsWith(BACKUP_ROOT))).toBe(false);
+		expect(local.has(`${report.reportDir}/report.json`)).toBe(true);
+		expect(local.has(LOCK_PATH)).toBe(false);
+	});
+
+	it("still fails when the device is offline without --allow-device-offline", async () => {
+		const { io } = world(null);
+
+		await expect(refreshReview(options({ allowDeviceOffline: false }), io)).rejects.toThrow(/not connected/);
+	});
+
+	it("treats an unauthorized device as offline in production mode", async () => {
+		const { io, calls } = world(device({ state: "unauthorized" }));
+
+		const report = await refreshReview(options({ allowDeviceOffline: true }), io);
+
+		expect(report.result).toBe("SKIPPED_DEVICE_OFFLINE");
+		expect(calls.some((c) => c.includes("pull") || c.includes("push"))).toBe(false);
+	});
+
+	it("does not skip when adb itself fails", async () => {
+		const base = world(device());
+		const io: RefreshIO = { ...base.io, adb: async () => ({ code: 1, stdout: "", stderr: "adb: not found" }) };
+
+		await expect(refreshReview(options({ allowDeviceOffline: true }), io)).rejects.toThrow(/adb devices failed/);
+	});
+
+	it("keeps the lock protection in production mode", async () => {
+		const { io, calls, local } = world(null);
+		local.set(LOCK_PATH, strToU8(JSON.stringify({ pid: 1, startedAt: NOW.toISOString() })));
+
+		await expect(refreshReview(options({ allowDeviceOffline: true }), io)).rejects.toThrow(/REFRESH ALREADY RUNNING/);
+		expect(calls.length).toBe(0);
+	});
+
 	it("uses -s <serial> on every adb command after the device listing", async () => {
 		const { io, calls } = world(device({ remoteStudy: studyBytes(previousLedger(), 2) }));
 
