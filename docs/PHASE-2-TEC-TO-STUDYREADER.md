@@ -224,7 +224,7 @@ respeite a regra de identidade acima.
 
 ## 8. DEPLOY
 
-Objetivo futuro (**não automatizar nesta fase**):
+Implementado na PHASE 2D (abaixo). Requisitos originais:
 
 ```
 PC → adb → Galaxy Tab → /sdcard/koreader/studyreader/courses/
@@ -523,6 +523,49 @@ INDIO_LEDGER="<vault>/.../obsidian-error-notebook-v1/ledger.json" pnpm study:bui
 `selected YES/NO (motivo)` e reasons de **todas** as questões analisadas. O
 relatório contém dados reais: não versionar.
 
+## PHASE 2D — Safe auto deploy
+
+`pnpm study:deploy-review -- --serial <serial> [--dry-run] [--restart-koreader]`
+(`packages/study-format/scripts/deploy-review.mts`; lógica pura testável em
+`scripts/deploy-review.ts`, testes em `tests/deploy-review.test.ts` com adb
+mockado). Variáveis: `INDIO_LEDGER`, `INDIO_TABLET_SERIAL`, `ADB` (caminho do
+`adb.exe`). O builder é o mesmo da 2C.1 (`scripts/review-pipeline.ts`,
+`--limit 30 --max-per-materia 6` por padrão).
+
+Fluxo, todo fail-closed (qualquer falha aborta antes de substituir):
+
+1. `--serial` obrigatório; `adb devices -l` precisa listar o serial em estado
+   `device`. Todo comando seguinte usa `adb -s <serial>`.
+2. Destino fixo `/sdcard/koreader/studyreader/courses/INDIO-REVISAO.study`;
+   o diretório precisa existir. Nada mais em `courses/` ou `data/` é tocado.
+3. Se já existe arquivo remoto: `sha256sum`, `adb pull`, conferência do hash,
+   leitura do `manifest` (id precisa ser `indio-revisao`) e da `version`.
+4. Build determinístico (`buildStableStudy`: mtime fixo = `priorityAsOf`)
+   com `version` = versão remota. Se o SHA-256 bater **ou** o conteúdo lógico
+   (todos os arquivos, ignorando `manifest.version`) for idêntico → `NO CHANGE`,
+   sem push, sem backup, sem restart.
+5. Caso contrário, rebuild com `version` = remota + 1 — o plugin só re-extrai
+   o cache quando a versão muda — e validação: `readStudy`,
+   `validateCrossReferences`, `manifest.id`, nº de aulas esperado, ids de
+   aula/módulo/flashcard sem duplicata, paths portáveis.
+6. `--dry-run` para aqui: mostra device, destino, hashes, versões e se haveria
+   deploy. Sem push, sem backup, sem restart.
+7. Backup do arquivo atual em `.indio-virtual/deploy-backups/<UTC stamp>/`
+   (`INDIO-REVISAO.study` + `meta.json` com serial, sha256, tamanho,
+   `manifest.version`). `.indio-virtual/` está no `.gitignore`.
+8. Hashes de `data/indio-revisao/{progress,answers,reviews}.json` antes.
+9. `adb push` para `INDIO-REVISAO.study.tmp`, `sha256sum` remoto; se diferir,
+   `rm` do temporário e abort (arquivo anterior intacto).
+10. `mv .tmp → .study` (rename no mesmo diretório), `touch` (invalida o cache
+    em memória do plugin, que é por mtime) e `sha256sum` final == local.
+11. Hashes de estado depois; qualquer diferença aborta com erro.
+12. `--restart-koreader`: `am force-stop org.koreader.launcher` +
+    `monkey -p org.koreader.launcher -c android.intent.category.LAUNCHER 1`,
+    só após `DEPLOYED` (nunca em `NO CHANGE` ou dry-run).
+
+Observação: `adb pull` sem `-a` não preserva mtime, e `adb push` no Windows
+grava mtime com deslocamento de fuso; por isso o `touch` após o rename.
+
 ## Sequência das fases
 
 | Fase | Entrega |
@@ -530,5 +573,5 @@ relatório contém dados reais: não versionar.
 | **2A** | JSON de 1 erro → `.study` válido |
 | 2B | Caderno de Erros → builder (adapter de ingest + dedupe) |
 | **2C** | Priorização determinística (bandas, recaída/recuperação, seleção balanceada) |
-| 2D | Deploy automático via `adb -s` com verificação de hash |
+| **2D** | Deploy seguro via `adb -s` (dry-run, backup, temp + rename, SHA-256, NO CHANGE) |
 | 2E | Feedback SRS → inteligência (etapa 9) |

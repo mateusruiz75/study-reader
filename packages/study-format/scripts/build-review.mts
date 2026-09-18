@@ -1,15 +1,16 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { buildStudy, readStudy, validateCrossReferences } from "../src/index.ts";
-import { adaptLedger } from "./adapters/error-notebook-ledger.ts";
-import { buildReviewCourse } from "./review-course.ts";
+import { readStudy, validateCrossReferences } from "../src/index.ts";
+import {
+	DEFAULT_LIMIT,
+	DEFAULT_MAX_PER_MATERIA,
+	buildStableStudy,
+	runReviewPipeline,
+} from "./review-pipeline.ts";
 import {
 	PRIORITY_BANDS,
-	deriveFeatures,
-	prioritizeEvents,
 	priorityProfileSchema,
-	selectBalanced,
 	type PrioritizedError,
 	type Selection,
 } from "./review-priority.ts";
@@ -17,7 +18,7 @@ import {
 const { values, positionals } = parseArgs({
 	allowPositionals: true,
 	options: {
-		limit: { type: "string", default: "30" },
+		limit: { type: "string", default: String(DEFAULT_LIMIT) },
 		"max-per-materia": { type: "string" },
 		"per-materia": { type: "string" },
 		"as-of": { type: "string" },
@@ -36,21 +37,18 @@ if (!input) {
 }
 
 const limit = Number(values.limit);
-const maxPerMateria = Number(values["max-per-materia"] ?? values["per-materia"] ?? "6");
+const maxPerMateria = Number(
+	values["max-per-materia"] ?? values["per-materia"] ?? String(DEFAULT_MAX_PER_MATERIA),
+);
 const profile = values.profile
 	? priorityProfileSchema.parse(JSON.parse(await readFile(resolve(values.profile), "utf8")))
 	: {};
 
-const adapted = adaptLedger(JSON.parse(await readFile(resolve(input), "utf8")));
-const asOf = values["as-of"] ?? adapted.latestEventAt;
-if (!asOf) {
-	console.error("ledger has no dated events; pass --as-of");
-	process.exit(1);
-}
-const features = deriveFeatures(adapted.attempts, asOf);
-const prioritized = prioritizeEvents(adapted.events, features, profile);
-const selection = selectBalanced(prioritized, { limit, maxPerMateria });
-const bytes = buildStudy(buildReviewCourse(selection.selected, { version: Number(values.version) }));
+const { adapted, asOf, prioritized, selection, pkg } = runReviewPipeline(
+	JSON.parse(await readFile(resolve(input), "utf8")),
+	{ limit, maxPerMateria, version: Number(values.version), asOf: values["as-of"], profile },
+);
+const bytes = buildStableStudy(pkg);
 
 const restored = readStudy(bytes, { loadLessons: true });
 const errors = validateCrossReferences(restored);

@@ -18,6 +18,7 @@ coverage/
 # local artifacts
 examples/*.study
 !examples/tiny-course.study
+.indio-virtual/
 vendor/
 
 # os
