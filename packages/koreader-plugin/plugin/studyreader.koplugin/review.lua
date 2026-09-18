@@ -126,12 +126,11 @@ function ReviewWidget:_populate()
     end
 
     if #self.due == 0 then
-        addText(_("Nothing to review"), Font:getFace("NotoSans-Bold.ttf", 26), true)
+        addText(Present.EMPTY.no_reviews, Font:getFace("NotoSans-Bold.ttf", 26), true)
         addSpan(PADDING)
-        addText(_("No flashcards are due right now. Come back later!"),
-            Font:getFace("cfont", 22))
+        addWrapped(Present.EMPTY.no_reviews_detail, Font:getFace("cfont", 22))
         addSpan(PADDING)
-        addButton(_("Close"), function() self:onClose() end)
+        addButton(_("VOLTAR"), function() self:onClose() end)
     else
         local card = self.due[self.index]
         local info = Present.cardMeta(self.course, card)

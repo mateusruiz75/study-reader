@@ -63,6 +63,19 @@ Menus are KOReader `Menu` widgets, so item text is a single flowing string
   `PERGUNTA` on the front, `PERGUNTA` + `RESPOSTA` on the back and the four
   SM-2 ratings (`Again · Hard · Good · Easy`) in one row.
 
+- Course summary (`● Resumo` row → `Screens.courseSummary`): read-only rows
+  built by `Present.courseInsights` + `Present.summaryItems` — progress,
+  quizzes, reviews (due · lapsing), priority bands, StudyReader signals and
+  the modules with most lessons. Lessons without metadata count as `UNSEEN`;
+  courses without metadata say so instead of showing zeros.
+- Review entry: `▲ REVISAR AGORA — N due · N lapsing · …` in bold when there
+  is something due, `○ Revisar — ✓ nenhuma revisão pendente` otherwise.
+- Empty states (`Present.EMPTY`): no courses, course/module without lessons,
+  no reviews due, no quiz pending, no priority metadata, no feedback.
+- Progress convention everywhere: `done/total unidade (pct%)` in the text,
+  bare `pct%` in the right column; badges `[BAND] [SIGNAL]` lead the lesson
+  title, followed by `Qid · N erros · há N dias`.
+
 Everything shown comes from the package manifest and the student state —
 nothing is inferred. Grading, persistence and the SRS scheduler are untouched
 by the presentation layer.

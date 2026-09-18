@@ -250,9 +250,9 @@ function QuizWidget:_buildBody(width)
     if self.mode == "summary" then
         self:_populateSummary(ui)
     elseif #self.pending == 0 then
-        addText(_("Quiz done!"), Font:getFace("NotoSans-Bold.ttf", 26), true)
+        addText(Present.EMPTY.no_quiz, Font:getFace("NotoSans-Bold.ttf", 26), true)
         addSpan(PADDING)
-        addButton(_("Close"), function() self:onClose() end)
+        addButton(_("VOLTAR"), function() self:onClose() end)
     elseif self.mode == "feedback" then
         self:_populateFeedback(ui)
     else

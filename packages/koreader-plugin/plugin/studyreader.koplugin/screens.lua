@@ -147,7 +147,7 @@ end
 function Screens.myCourses()
     local courses = Store.listCourses()
     if #courses == 0 then
-        warn(_("No .study courses found. Copy them to a 'study' folder inside your documents directory."))
+        warn(Present.EMPTY.no_courses)
         return
     end
     local last = State.getLastCourse()
@@ -172,13 +172,9 @@ function Screens.myCourses()
             }
         end
     end
-    local subtitle = string.format(_("%d courses"), #courses)
-    if total_due > 0 then
-        subtitle = subtitle .. string.format(_(" · %d reviews due"), total_due)
-    end
     pushMenu({
         title = _("My courses"),
-        subtitle = subtitle,
+        subtitle = Present.coursesSubtitle(#courses, total_due),
         item_table = items,
         items_per_page = ITEMS_PER_PAGE,
     })
@@ -188,14 +184,25 @@ function Screens.courseMenu(course)
     local state = State.load(course.id)
     local stats = courseStats(course, state)
 
+    local insights = Present.courseInsights(course, stats)
     local items = {}
     if #Store.getFlashcards(course) > 0 then
-        local reviews = Present.reviewsItem(stats.due)
-        reviews.separator = true
+        local reviews = Present.reviewEntry({
+            due = stats.due, lapsing = insights.lapsing, unseen = insights.unseen, learning = insights.learning,
+        })
         reviews.callback = function() Screens.startReviews(course) end
         items[#items + 1] = reviews
     end
-    for _, module in ipairs(Store.modules(course)) do
+    items[#items + 1] = {
+        text = "● Resumo  —  " .. insights.progress .. " · " .. insights.quizzes,
+        separator = true,
+        callback = function() Screens.courseSummary(course, insights) end,
+    }
+    local modules = Store.modules(course)
+    if #modules == 0 then
+        items[#items + 1] = Present.emptyItem("no-lessons")
+    end
+    for _, module in ipairs(modules) do
         local item = Present.moduleItem(module.title, moduleStats(state, module), Present.priorityCounts(course, module))
         item.callback = function() Screens.moduleMenu(course, module) end
         items[#items + 1] = item
@@ -209,10 +216,22 @@ function Screens.courseMenu(course)
     })
 end
 
+function Screens.courseSummary(course, insights)
+    pushChildMenu({
+        title = _("Resumo"),
+        subtitle = course.manifest.title or course.id,
+        item_table = Present.summaryItems(insights),
+        items_per_page = ITEMS_PER_PAGE,
+    })
+end
+
 function Screens.moduleMenu(course, module)
     local state = State.load(course.id)
     local items = {}
     local stats = moduleStats(state, module)
+    if #module.lessons == 0 then
+        items[#items + 1] = Present.emptyItem("no-module-lessons")
+    end
     for _, lesson in ipairs(module.lessons) do
         local item = Present.lessonItem(lesson, State.completedLesson(state, lesson.id),
             quizStats(course, state, lesson), Present.lessonMeta(course, lesson))
@@ -221,7 +240,7 @@ function Screens.moduleMenu(course, module)
     end
     pushChildMenu({
         title = module.title,
-        subtitle = string.format("%d/%d aulas · %s", stats.done, stats.lessons, Present.percentText(stats.done, stats.lessons)),
+        subtitle = Present.progressText(stats.done, stats.lessons),
         item_table = items,
         items_per_page = ITEMS_PER_PAGE,
     })
@@ -302,7 +321,7 @@ function Screens.reviewsFlow()
         end
     end
     if #candidates == 0 then
-        warn(_("No courses with flashcards."))
+        warn(Present.EMPTY.no_reviews)
         return
     end
     if #candidates == 1 then

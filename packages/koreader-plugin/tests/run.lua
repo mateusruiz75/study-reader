@@ -503,9 +503,6 @@ check("present: course, module and lesson menu items carry a readable second lin
 	assert(module.text:match("5 CRITICAL") and module.text:match("1 HIGH"), "module priority counts")
 	assert(module.mandatory == "16%", "module percent")
 
-	local reviews = Present.reviewsItem(29)
-	assert(reviews.text:match("^Reviews  —  29 flashcards") and reviews.mandatory == "29 due" and reviews.bold, "reviews item")
-	assert(Present.reviewsItem(0).bold == false, "no due → not bold")
 
 	local course = sampleCourse()
 	local lesson = Present.lessonItem(course.manifest.modules[1].lessons[1], true,
@@ -513,7 +510,7 @@ check("present: course, module and lesson menu items carry a readable second lin
 	assert(lesson.text:match("^✓ %[CRITICAL%] %[LAPSING%] Competência · Q111"), "mark and badges lead the title")
 	local unseen = Present.lessonItem({ id = "error-9", title = "T · Q9" }, false, nil, { priority = "MEDIUM", signal = "UNSEEN", reasons = {} })
 	assert(unseen.text == "○ [MEDIUM] T · Q9", "UNSEEN is the default state and is not badged in lists")
-	assert(lesson.text:match("erro há 2 dias"), "recency from metadata")
+	assert(lesson.text:match("3 erros · há 2 dias"), "history summary from metadata")
 	assert(lesson.mandatory == "✗ 1/1", "wrong quiz in the right column")
 	local pending = Present.lessonItem(course.manifest.modules[2].lessons[1], false, { total = 1, answered = 0 }, nil)
 	assert(pending.text == "○ Ativo · Q333", "pending lesson without metadata")
@@ -754,6 +751,82 @@ check("review: flashcard front/back layout and the four ratings map to SRS grade
 		quizButtons(w)[3].callback()
 		assert(state.reviews["333-card"].reps == 1 and state.reviews["333-card"].interval == 1, "Good → first interval")
 		assert(#shown == 1, "done message shown after the last card")
+	end)
+end)
+
+check("present: course insights aggregate only existing data", function()
+	local course = sampleCourse()
+	local stats = { modules = 2, lessons = 3, done = 1, quizzes = 3, answered = 2, due = 2 }
+	local insights = Present.courseInsights(course, stats)
+	assert(insights.progress == "1/3 aulas (33%)", insights.progress)
+	assert(insights.quizzes == "2/3 quizzes (66%)", insights.quizzes)
+	assert(insights.reviews == "2 due · 1 lapsing", insights.reviews)
+	assert(insights.priorities[1].band == "CRITICAL" and insights.priorities[1].count == 1, "critical count")
+	assert(insights.priorities[2].band == "HIGH" and insights.priorities[2].count == 1, "high count")
+	assert(#insights.priorities == 2, "bands with zero are omitted")
+	assert(insights.signals[1].signal == "LAPSING" and insights.signals[1].count == 1, "lapsing count")
+	assert(insights.signals[2].signal == "UNSEEN" and insights.signals[2].count == 2, "lessons without feedback count as UNSEEN")
+	assert(insights.materias[1].title == "Direito Tributário" and insights.materias[1].count == 2, "materia ranking")
+	assert(insights.materias[2].title == "Contabilidade Geral" and insights.materias[2].count == 1, "materia ranking 2")
+	assert(insights.hasFeedback == true, "feedback present")
+
+	local bare = Present.courseInsights({ manifest = { modules = {} } }, { modules = 0, lessons = 0, done = 0, quizzes = 0, answered = 0, due = 0 })
+	assert(bare.progress == "0/0 aulas (0%)" and #bare.priorities == 0 and bare.hasFeedback == false, "empty course insights")
+
+	local items = Present.summaryItems(insights)
+	local texts = {}
+	for _, item in ipairs(items) do
+		texts[#texts + 1] = item.text
+		assert(item.select_enabled == false, "summary rows are read-only")
+	end
+	local joined = table.concat(texts, "\n")
+	assert(joined:match("Progresso") and joined:match("1/3 aulas"), "progress row")
+	assert(joined:match("Prioridades") and joined:match("CRITICAL 1") and joined:match("HIGH 1"), "priority row")
+	assert(joined:match("StudyReader") and joined:match("LAPSING 1") and joined:match("UNSEEN 2"), "signal row")
+	assert(joined:match("Matérias") and joined:match("Direito Tributário 2"), "materia row")
+	local empty_items = Present.summaryItems(bare)
+	local empty_joined = {}
+	for _, item in ipairs(empty_items) do empty_joined[#empty_joined + 1] = item.text end
+	empty_joined = table.concat(empty_joined, "\n")
+	assert(empty_joined:match("sem metadata de prioridade") and empty_joined:match("sem feedback do StudyReader"), "empty insight rows")
+end)
+
+check("present: review entry and empty states never look broken", function()
+	local due = Present.reviewEntry({ due = 30, lapsing = 2, unseen = 20, learning = 5 })
+	assert(due.text:match("^▲ REVISAR AGORA  —  30 due · 2 lapsing"), due.text)
+	assert(due.mandatory == "30 due" and due.bold == true, "due entry emphasised")
+	local none = Present.reviewEntry({ due = 0, lapsing = 0, unseen = 0, learning = 0 })
+	assert(none.text:match("^○ Revisar  —  ✓ nenhuma revisão pendente"), none.text)
+	assert(none.bold == false and none.mandatory == "0 due", "no due → quiet entry")
+
+	assert(Present.emptyItem("no-lessons").text == "Este curso ainda não possui aulas.", "course without lessons")
+	assert(Present.emptyItem("no-module-lessons").text == "Este módulo ainda não possui aulas.", "module without lessons")
+	assert(Present.emptyItem("no-lessons").select_enabled == false and Present.emptyItem("no-lessons").dim == true, "empty rows are inert and dimmed")
+	assert(Present.EMPTY.no_reviews == "✓ Nenhuma revisão pendente", "no reviews text")
+	assert(Present.EMPTY.no_quiz == "✓ Nenhum quiz pendente nesta aula", "no quiz text")
+	assert(Present.EMPTY.no_courses:match("Nenhum curso"), "no courses text")
+end)
+
+check("present: progress and labels follow one convention", function()
+	assert(Present.progressText(2, 30) == "2/30 aulas (6%)", Present.progressText(2, 30))
+	assert(Present.progressText(1, 1, "quiz", "quizzes") == "1/1 quiz (100%)", "singular unit")
+	assert(Present.coursesSubtitle(3, 31) == "3 cursos · 31 reviews", Present.coursesSubtitle(3, 31))
+	assert(Present.coursesSubtitle(1, 0) == "1 curso", "no due → no review part")
+	local course = sampleCourse()
+	local lesson = Present.lessonItem(course.manifest.modules[1].lessons[1], false, { total = 1, answered = 0 },
+		Present.lessonMeta(course, course.manifest.modules[1].lessons[1]))
+	assert(lesson.text == "○ [CRITICAL] [LAPSING] Competência · Q111 · 3 erros · há 2 dias", lesson.text)
+end)
+
+check("quiz: small viewport keeps options wrapped and reachable", function()
+	withQuizWidget(480, 640, function(QuizWidget)
+		local w = newQuiz(QuizWidget, LONG_QUESTION)
+		local view = w.cropping_widget
+		assert(view.dimen.w == 480 - 30 and view.dimen.h == 640 - 80 - 30, "viewport follows the screen size")
+		local buttons = quizButtons(w)
+		assert(#buttons == 5 and buttons[5].label.width < view.dimen.w, "options fit beside the scrollbar")
+		assert(buttons[1].label.face.size == 22, "font not reduced on small screens")
+		assert(w[1]:getSize().h <= 640, "widget within the screen")
 	end)
 end)
 

@@ -25,6 +25,18 @@ function Present.percentText(done, total)
     return string.format("%d%%", percent(done, total))
 end
 
+function Present.progressText(done, total, singular, plural_form)
+    singular = singular or "aula"
+    plural_form = plural_form or "aulas"
+    return string.format("%d/%d %s (%d%%)", done, total, total == 1 and singular or plural_form, percent(done, total))
+end
+
+function Present.coursesSubtitle(courses, due)
+    local text = string.format("%d %s", courses, courses == 1 and "curso" or "cursos")
+    if (due or 0) > 0 then text = text .. string.format(" · %d reviews", due) end
+    return text
+end
+
 function Present.bar(done, total, width)
     width = width or 10
     local filled = 0
@@ -146,14 +158,134 @@ function Present.moduleItem(title, stats, priority_counts)
     }
 end
 
-function Present.reviewsItem(due)
-    local detail
+Present.EMPTY = {
+    no_courses = "Nenhum curso .study encontrado. Copie os cursos para a pasta 'study' dos seus documentos.",
+    no_lessons = "Este curso ainda não possui aulas.",
+    no_module_lessons = "Este módulo ainda não possui aulas.",
+    no_reviews = "✓ Nenhuma revisão pendente",
+    no_reviews_detail = "Nenhum flashcard vencido agora. Volte mais tarde.",
+    no_quiz = "✓ Nenhum quiz pendente nesta aula",
+    no_priority = "sem metadata de prioridade neste curso",
+    no_feedback = "sem feedback do StudyReader ainda",
+}
+
+local EMPTY_ITEMS = {
+    ["no-lessons"] = Present.EMPTY.no_lessons,
+    ["no-module-lessons"] = Present.EMPTY.no_module_lessons,
+}
+
+function Present.emptyItem(kind)
+    return { text = EMPTY_ITEMS[kind] or Present.EMPTY.no_lessons, select_enabled = false, dim = true }
+end
+
+function Present.reviewEntry(counts)
+    local due = counts.due or 0
     if due > 0 then
-        detail = plural(due, "flashcard vencido · revisar agora", "flashcards vencidos · revisar agora")
-    else
-        detail = "nenhum flashcard vencido"
+        local parts = { string.format("%d due", due) }
+        if (counts.lapsing or 0) > 0 then parts[#parts + 1] = string.format("%d lapsing", counts.lapsing) end
+        if (counts.learning or 0) > 0 then parts[#parts + 1] = string.format("%d learning", counts.learning) end
+        if (counts.unseen or 0) > 0 then parts[#parts + 1] = string.format("%d unseen", counts.unseen) end
+        return {
+            text = "▲ REVISAR AGORA  —  " .. table.concat(parts, " · "),
+            mandatory = string.format("%d due", due),
+            bold = true,
+        }
     end
-    return { text = "Reviews  —  " .. detail, mandatory = string.format("%d due", due), bold = due > 0 }
+    return {
+        text = "○ Revisar  —  ✓ nenhuma revisão pendente",
+        mandatory = "0 due",
+        bold = false,
+        mandatory_dim = true,
+    }
+end
+
+function Present.signalCounts(course)
+    local counts = {}
+    for _, module in ipairs(course.manifest and course.manifest.modules or {}) do
+        for _, lesson in ipairs(module.lessons or {}) do
+            local meta = Present.lessonMeta(course, lesson)
+            local signal = meta and meta.signal or "UNSEEN"
+            counts[signal] = (counts[signal] or 0) + 1
+        end
+    end
+    return counts
+end
+
+local SIGNAL_ORDER = { "LAPSING", "DUE", "UNSEEN", "LEARNING", "STABLE" }
+Present.SIGNAL_ORDER = SIGNAL_ORDER
+
+function Present.courseInsights(course, stats)
+    local modules = course.manifest and course.manifest.modules or {}
+    local priorities = {}
+    for _, module in ipairs(modules) do
+        for band, n in pairs(Present.priorityCounts(course, module)) do
+            priorities[band] = (priorities[band] or 0) + n
+        end
+    end
+    local ordered_priorities = {}
+    for _, band in ipairs(PRIORITY_ORDER) do
+        if (priorities[band] or 0) > 0 then
+            ordered_priorities[#ordered_priorities + 1] = { band = band, count = priorities[band] }
+        end
+    end
+    local signals = Present.signalCounts(course)
+    local ordered_signals = {}
+    local has_feedback = false
+    for _, signal in ipairs(SIGNAL_ORDER) do
+        if (signals[signal] or 0) > 0 then
+            ordered_signals[#ordered_signals + 1] = { signal = signal, count = signals[signal] }
+            if signal ~= "UNSEEN" then has_feedback = true end
+        end
+    end
+    local materias = {}
+    for _, module in ipairs(modules) do
+        materias[#materias + 1] = { title = module.title, count = #(module.lessons or {}) }
+    end
+    table.sort(materias, function(a, b)
+        if a.count ~= b.count then return a.count > b.count end
+        return a.title < b.title
+    end)
+    local reviews = string.format("%d due", stats.due or 0)
+    if (signals.LAPSING or 0) > 0 then reviews = reviews .. string.format(" · %d lapsing", signals.LAPSING) end
+    return {
+        progress = Present.progressText(stats.done, stats.lessons),
+        quizzes = Present.progressText(stats.answered or 0, stats.quizzes or 0, "quiz", "quizzes"),
+        reviews = reviews,
+        priorities = ordered_priorities,
+        signals = ordered_signals,
+        materias = materias,
+        hasFeedback = has_feedback,
+        lapsing = signals.LAPSING or 0,
+        unseen = signals.UNSEEN or 0,
+        learning = signals.LEARNING or 0,
+    }
+end
+
+local function countsLine(entries, key)
+    local parts = {}
+    for _, entry in ipairs(entries) do
+        parts[#parts + 1] = string.format("%s %d", entry[key], entry.count)
+    end
+    return table.concat(parts, " · ")
+end
+
+function Present.summaryItems(insights)
+    local function row(label, detail, mandatory)
+        return { text = label .. "  —  " .. detail, mandatory = mandatory, select_enabled = false }
+    end
+    local items = {
+        row("Progresso", insights.progress),
+        row("Quizzes", insights.quizzes),
+        row("Reviews", insights.reviews),
+        row("Prioridades", #insights.priorities > 0 and countsLine(insights.priorities, "band") or Present.EMPTY.no_priority),
+        row("StudyReader", insights.hasFeedback and countsLine(insights.signals, "signal") or Present.EMPTY.no_feedback),
+    }
+    if #insights.materias > 0 then
+        local top = {}
+        for i = 1, math.min(5, #insights.materias) do top[i] = insights.materias[i] end
+        items[#items + 1] = row("Matérias", countsLine(top, "title"))
+    end
+    return items
 end
 
 function Present.lessonItem(lesson, completed, quiz, meta)
@@ -165,8 +297,11 @@ function Present.lessonItem(lesson, completed, quiz, meta)
         if signal then lead[#lead + 1] = signal end
     end
     local text = table.concat(lead, " ") .. " " .. lesson.title
+    if meta and meta.errorCount then
+        text = text .. " · " .. plural(meta.errorCount, "erro", "erros")
+    end
     if meta and meta.daysSinceLastError then
-        text = text .. string.format(" · erro há %s", plural(meta.daysSinceLastError, "dia", "dias"))
+        text = text .. string.format(" · há %s", plural(meta.daysSinceLastError, "dia", "dias"))
     end
     local mandatory
     local answered = quiz and quiz.answered or 0
