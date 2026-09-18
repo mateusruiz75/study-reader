@@ -9,7 +9,9 @@ import {
 	type PriorityProfile,
 	type PrioritizedError,
 	type Selection,
+	type StudyContext,
 } from "./review-priority.ts";
+import { normalizeStudyFeedback } from "./study-feedback.ts";
 
 export const DEFAULT_LIMIT = 30;
 export const DEFAULT_MAX_PER_MATERIA = 6;
@@ -20,6 +22,7 @@ export type ReviewPipelineOptions = {
 	version: number;
 	asOf?: string;
 	profile?: PriorityProfile;
+	study?: StudyContext;
 };
 
 export type ReviewPipelineResult = {
@@ -35,13 +38,33 @@ export function runReviewPipeline(rawLedger: unknown, options: ReviewPipelineOpt
 	const asOf = options.asOf ?? adapted.latestEventAt;
 	if (!asOf) throw new Error("ledger has no dated events; pass --as-of");
 	const features = deriveFeatures(adapted.attempts, asOf);
-	const prioritized = prioritizeEvents(adapted.events, features, options.profile ?? {});
+	const prioritized = prioritizeEvents(adapted.events, features, options.profile ?? {}, options.study);
 	const selection = selectBalanced(prioritized, {
 		limit: options.limit,
 		maxPerMateria: options.maxPerMateria,
 	});
 	const pkg = buildReviewCourse(selection.selected, { version: options.version });
 	return { adapted, asOf, prioritized, selection, pkg };
+}
+
+export type FeedbackDirFiles = {
+	progress: unknown;
+	answers: unknown;
+	reviews: unknown;
+	metadata: { collectedAtEpoch: number; courseId?: string };
+};
+
+export function studyContextFromFiles(files: FeedbackDirFiles): StudyContext {
+	if (!Number.isInteger(files.metadata.collectedAtEpoch)) {
+		throw new Error("feedback metadata.json has no collectedAtEpoch");
+	}
+	const store = normalizeStudyFeedback({
+		progress: files.progress as never,
+		answers: files.answers as never,
+		reviews: files.reviews as never,
+		collectedAt: files.metadata.collectedAtEpoch,
+	});
+	return { store, now: files.metadata.collectedAtEpoch };
 }
 
 export const STABLE_MTIME_FALLBACK = new Date("2000-01-01T00:00:00.000Z");

@@ -1,5 +1,13 @@
 import { z } from "zod";
-import type { ErrorEvent } from "./error-event.ts";
+import { dedupeKey, type ErrorEvent } from "./error-event.ts";
+import {
+	STUDY_SIGNAL_ORDER,
+	classifyStudySignal,
+	studyReasons,
+	type StudyFeedback,
+	type StudyFeedbackStore,
+	type StudySignal,
+} from "./study-feedback.ts";
 
 export type AttemptResult = "error" | "correct" | "unknown";
 
@@ -57,10 +65,22 @@ export const priorityProfileSchema = z.object({
 
 export type PriorityProfile = z.input<typeof priorityProfileSchema>;
 
+export type StudyContext = {
+	store: StudyFeedbackStore;
+	now: number;
+};
+
+export type StudyAssessment = {
+	signal: StudySignal;
+	feedback: StudyFeedback | null;
+	reasons: string[];
+};
+
 export type PrioritizedError = PriorityClassification & {
 	event: ErrorEvent;
 	features: PriorityFeatures;
 	boost: number;
+	study?: StudyAssessment;
 };
 
 export type RejectionReason = "limit" | "max-per-materia";
@@ -218,9 +238,15 @@ export function classifyPriority(f: PriorityFeatures): PriorityClassification {
 
 export const BOOST_REASON = "matéria priorizada no perfil";
 
+function studyRank(item: PrioritizedError): number {
+	return item.study ? STUDY_SIGNAL_ORDER.indexOf(item.study.signal) : 0;
+}
+
 function comparePrioritized(a: PrioritizedError, b: PrioritizedError): number {
 	const band = PRIORITY_BANDS.indexOf(a.priority) - PRIORITY_BANDS.indexOf(b.priority);
 	if (band !== 0) return band;
+	const study = studyRank(a) - studyRank(b);
+	if (study !== 0) return study;
 	if (a.boost !== b.boost) return b.boost - a.boost;
 	const fa = a.features;
 	const fb = b.features;
@@ -233,10 +259,17 @@ function comparePrioritized(a: PrioritizedError, b: PrioritizedError): number {
 	return fa.questionId < fb.questionId ? -1 : fa.questionId > fb.questionId ? 1 : 0;
 }
 
+export function assessStudy(event: ErrorEvent, context: StudyContext): StudyAssessment {
+	const feedback = context.store.byQuestion.get(dedupeKey(event)) ?? null;
+	const signal = classifyStudySignal(feedback ?? undefined, context.now);
+	return { signal, feedback, reasons: feedback ? studyReasons(feedback, signal, context.now) : [] };
+}
+
 export function prioritizeEvents(
 	events: ErrorEvent[],
 	features: Map<string, PriorityFeatures>,
 	profile: PriorityProfile = {},
+	study?: StudyContext,
 ): PrioritizedError[] {
 	const { materiaBoosts } = priorityProfileSchema.parse(profile);
 	const items: PrioritizedError[] = [];
@@ -245,12 +278,19 @@ export function prioritizeEvents(
 		if (!f) throw new Error(`no priority features for question ${event.questionId ?? event.eventId}`);
 		const classification = classifyPriority(f);
 		const boost = materiaBoosts[event.materia] ?? 0;
+		const assessment = study ? assessStudy(event, study) : undefined;
+		const reasons = [
+			...classification.reasons,
+			...(boost > 0 ? [BOOST_REASON] : []),
+			...(assessment?.reasons ?? []),
+		];
 		items.push({
 			...classification,
-			reasons: boost > 0 ? [...classification.reasons, BOOST_REASON] : classification.reasons,
+			reasons,
 			event,
 			features: f,
 			boost,
+			...(assessment ? { study: assessment } : {}),
 		});
 	}
 	return items.sort(comparePrioritized);

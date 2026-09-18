@@ -566,6 +566,84 @@ Fluxo, todo fail-closed (qualquer falha aborta antes de substituir):
 Observação: `adb pull` sem `-a` não preserva mtime, e `adb push` no Windows
 grava mtime com deslocamento de fuso; por isso o `touch` após o rename.
 
+## PHASE 2E — StudyReader feedback loop
+
+Fecha o primeiro ciclo: o estado que o plugin grava no tablet volta como
+**fonte adicional de sinais**, read-only. Nada é escrito no ledger, no TEC, no
+Caderno de Erros ou no tablet; nenhum `knowledge.answer_recorded` é publicado.
+
+### Schema real (`/sdcard/koreader/studyreader/data/indio-revisao/`)
+
+| Arquivo | Conteúdo real | Sinais |
+| --- | --- | --- |
+| `progress.json` | `{ currentLesson, completedLessons: { "error-<qid>": ISO \| true } }` | aula concluída, `completedAt` (`null` se legado `true`) |
+| `answers.json` | `{ "<qid>-recovery": { selected[], correct, answeredAt } }` — só a **última** resposta | quiz respondido/acertou/selecionada/quando |
+| `reviews.json` | `{ "<qid>-card": { reps, lapses, ef, interval (dias), due (epoch s) } }` | reps, lapses, ease, intervalo, due |
+
+NOT AVAILABLE: timestamp da última revisão, histórico de revisões (`reps`
+zera no lapse).
+
+### Mapeamento de ids (`scripts/study-feedback.ts`)
+
+`questionKeyFromLessonId("error-<k>")`, `questionKeyFromQuizId("<k>-recovery")`,
+`questionKeyFromCardId("<k>-card")` → `k` = `dedupeKey` (igual ao `questionId`
+do TEC). Ids fora do padrão vão para `unknownIds` e nunca são atribuídos.
+
+### Snapshot (`pnpm study:sync-feedback -- --serial <serial>`)
+
+`scripts/sync-feedback.ts`: `adb devices -l` → `-s <serial>` em tudo → `ls -d`
+do diretório → `sha256sum` dos 3 arquivos → `adb pull` → `sha256sum` de novo.
+Se algum hash mudou (ou o arquivo puxado não bate), tenta mais 1 vez; se mudar
+de novo: `STATE CHANGED DURING SNAPSHOT`, sem gravar `snapshots/` nem
+`latest/`. Só `shell ls`, `shell sha256sum` e `pull` — nenhuma escrita no
+device. Saída em `.indio-virtual/study-feedback/snapshots/<UTC stamp>/` e
+`latest/`: os 3 JSONs originais + `metadata.json` (serial, `courseId`,
+`remoteDir`, `collectedAt`, `collectedAtEpoch`, hashes e tamanhos).
+
+### `StudyFeedback` (namespace separado de `PriorityFeatures`)
+
+`questionKey, lessonCompleted, lessonCompletedAt, quizAnswered, quizCorrect,
+quizSelected, quizAnsweredAt, reviewReps, reviewLapses, reviewInterval,
+reviewEase, reviewDueAt` — ausência é `null`/`false`. Nenhum campo do ledger
+(`errorCount`, `attemptCount`, `recurrence`, recaída, recuperação) é tocado:
+uma resposta no StudyReader **não** é uma tentativa no TEC.
+
+### Study signal (avaliado em `now` = `collectedAtEpoch` do snapshot)
+
+| Sinal | Regra (primeira que casa) |
+| --- | --- |
+| `LAPSING` | card com `reps == 0 && lapses > 0` (em reaprendizado) **ou** último quiz errado |
+| `DUE` | card com `due <= now` |
+| `STABLE` | card com `reps >= 3` (≥ 16 dias de intervalo no SM-2 do plugin) |
+| `LEARNING` | qualquer outro sinal (card curto, quiz certo, aula concluída) |
+| `UNSEEN` | nenhum registro |
+
+Sem feedback, todo item é tratado como `UNSEEN`.
+
+### Ordem exata dentro da banda
+
+1. banda (`CRITICAL > HIGH > MEDIUM > LOW`) — **só do ledger, inalterada**
+2. study signal: `LAPSING → DUE → UNSEEN → LEARNING → STABLE`
+3. `materiaBoosts` do profile
+4. `errorCount` desc → `errorsAfterCorrect` desc → `correctAfterLastError` asc
+5. `lastErrorAt` desc
+6. `questionId`
+
+Sem feedback o passo 2 é neutro e o resultado é idêntico à 2C.1.
+
+### Build e report
+
+`pnpm study:build-review -- ... --feedback .indio-virtual/study-feedback/latest`.
+As reasons do ledger vêm primeiro; as do StudyReader vêm depois, sempre com
+prefixo `StudyReader:` (`"1 lapse no card"`, `"card due"`,
+`"quiz errado (C)"`, `"2 revisões concluídas"`, `"aula concluída"`). O
+priority report ganha `studySignal`, `quizCorrect`, `reviewReps`,
+`reviewLapses`, `reviewInterval`, `reviewDue`. `extensions.indio.priorities[k].study`
+carrega o sinal e os campos usados; `phase` passa a `"2E"`.
+
+Feedback de questões fora das 30 atuais fica no store e volta a contar quando
+a questão disputar seleção.
+
 ## Sequência das fases
 
 | Fase | Entrega |
@@ -574,4 +652,4 @@ grava mtime com deslocamento de fuso; por isso o `touch` após o rename.
 | 2B | Caderno de Erros → builder (adapter de ingest + dedupe) |
 | **2C** | Priorização determinística (bandas, recaída/recuperação, seleção balanceada) |
 | **2D** | Deploy seguro via `adb -s` (dry-run, backup, temp + rename, SHA-256, NO CHANGE) |
-| 2E | Feedback SRS → inteligência (etapa 9) |
+| **2E** | Feedback do StudyReader (read-only) como desempate dentro da banda |

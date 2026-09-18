@@ -7,6 +7,7 @@ import {
 	DEFAULT_MAX_PER_MATERIA,
 	buildStableStudy,
 	runReviewPipeline,
+	studyContextFromFiles,
 } from "./review-pipeline.ts";
 import {
 	PRIORITY_BANDS,
@@ -15,7 +16,11 @@ import {
 	type Selection,
 } from "./review-priority.ts";
 
+const argv = process.argv.slice(2);
+if (argv[0] === "--") argv.shift();
+
 const { values, positionals } = parseArgs({
+	args: argv,
 	allowPositionals: true,
 	options: {
 		limit: { type: "string", default: String(DEFAULT_LIMIT) },
@@ -24,6 +29,7 @@ const { values, positionals } = parseArgs({
 		"as-of": { type: "string" },
 		profile: { type: "string" },
 		"priority-report": { type: "string" },
+		feedback: { type: "string" },
 		version: { type: "string", default: "1" },
 	},
 });
@@ -31,7 +37,7 @@ const input = positionals[0] ?? process.env.INDIO_LEDGER;
 const output = positionals[1] ?? "examples/INDIO-REVISAO.study";
 if (!input) {
 	console.error(
-		"usage: build-review.mts <ledger.json | $INDIO_LEDGER> [output.study] [--limit 30] [--max-per-materia 6] [--as-of ISO] [--profile profile.json] [--priority-report report.md] [--version 1]",
+		"usage: build-review.mts <ledger.json | $INDIO_LEDGER> [output.study] [--limit 30] [--max-per-materia 6] [--as-of ISO] [--profile profile.json] [--feedback .indio-virtual/study-feedback/latest] [--priority-report report.md] [--version 1]",
 	);
 	process.exit(1);
 }
@@ -44,9 +50,19 @@ const profile = values.profile
 	? priorityProfileSchema.parse(JSON.parse(await readFile(resolve(values.profile), "utf8")))
 	: {};
 
+const readJson = async (path: string) => JSON.parse(await readFile(path, "utf8"));
+const study = values.feedback
+	? studyContextFromFiles({
+			progress: await readJson(resolve(values.feedback, "progress.json")),
+			answers: await readJson(resolve(values.feedback, "answers.json")),
+			reviews: await readJson(resolve(values.feedback, "reviews.json")),
+			metadata: await readJson(resolve(values.feedback, "metadata.json")),
+		})
+	: undefined;
+
 const { adapted, asOf, prioritized, selection, pkg } = runReviewPipeline(
 	JSON.parse(await readFile(resolve(input), "utf8")),
-	{ limit, maxPerMateria, version: Number(values.version), asOf: values["as-of"], profile },
+	{ limit, maxPerMateria, version: Number(values.version), asOf: values["as-of"], profile, study },
 );
 const bytes = buildStableStudy(pkg);
 
@@ -79,6 +95,14 @@ console.log(
 	`   source: errors=${adapted.errorsSeen} answers=${adapted.answersSeen} usable-unique=${adapted.events.length} duplicates-removed=${adapted.duplicatesRemoved} skipped=${JSON.stringify(adapted.skipped)}`,
 );
 console.log(`   priority: as-of=${asOf} bands=${JSON.stringify(bands)}`);
+if (study) {
+	const signals: Record<string, number> = {};
+	for (const item of prioritized) signals[item.study!.signal] = (signals[item.study!.signal] ?? 0) + 1;
+	const unknown = study.store.unknownIds;
+	console.log(
+		`   study feedback: questions=${study.store.byQuestion.size} signals(candidates)=${JSON.stringify(signals)} unknown-ids=${unknown.lessons.length + unknown.quizzes.length + unknown.cards.length}`,
+	);
+}
 console.log(
 	`   selection: limit=${limit} max-per-materia=${maxPerMateria} selected=${selection.selected.length} rejected=${selection.rejected.length}`,
 );
@@ -99,15 +123,17 @@ function renderReport(items: PrioritizedError[], selection: Selection, asOf: str
 		`analyzed: ${items.length}`,
 		`selected: ${selection.selected.length}`,
 		"",
-		"| # | questionId | materia | priority | rule | selected | reasons |",
-		"| --- | --- | --- | --- | --- | --- | --- |",
+		"| # | questionId | materia | priority | rule | selected | studySignal | quizCorrect | reviewReps | reviewLapses | reviewInterval | reviewDue | reasons |",
+		"| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
 	];
+	const cell = (value: unknown) => (value === null || value === undefined ? "" : String(value));
 	items.forEach((item, index) => {
 		const status = selectedKeys.has(item.event.eventId)
 			? "YES"
 			: `NO (${rejectedBy.get(item.event.eventId) ?? "?"})`;
+		const fb = item.study?.feedback;
 		lines.push(
-			`| ${index + 1} | ${item.event.questionId} | ${item.event.materia} | ${item.priority} | ${item.rule} | ${status} | ${item.reasons.join("; ")} |`,
+			`| ${index + 1} | ${item.event.questionId} | ${item.event.materia} | ${item.priority} | ${item.rule} | ${status} | ${cell(item.study?.signal)} | ${cell(fb?.quizCorrect)} | ${cell(fb?.reviewReps)} | ${cell(fb?.reviewLapses)} | ${cell(fb?.reviewInterval)} | ${cell(fb?.reviewDueAt)} | ${item.reasons.join("; ")} |`,
 		);
 	});
 	return `${lines.join("\n")}\n`;

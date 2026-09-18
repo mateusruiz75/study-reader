@@ -86,6 +86,23 @@ function priorityMetadata(item: PrioritizedError) {
 		daysSinceLastError: f.daysSinceLastError,
 		latestResult: f.latestResult,
 		wrongAnswerPattern: f.wrongAnswerPattern,
+		...(item.study
+			? {
+					study: {
+						signal: item.study.signal,
+						...(item.study.feedback
+							? {
+									lessonCompleted: item.study.feedback.lessonCompleted,
+									quizCorrect: item.study.feedback.quizCorrect,
+									reviewReps: item.study.feedback.reviewReps,
+									reviewLapses: item.study.feedback.reviewLapses,
+									reviewInterval: item.study.feedback.reviewInterval,
+									reviewDueAt: item.study.feedback.reviewDueAt,
+								}
+							: {}),
+					},
+				}
+			: {}),
 	};
 }
 
@@ -136,7 +153,7 @@ export function buildReviewCourse(
 			modules,
 			extensions: {
 				indio: {
-					phase: "2C",
+					phase: "2E",
 					dedupeKeys: resolved.map((r) => dedupeKey(r.event)),
 					eventIds: resolved.map((r) => r.event.eventId),
 					...(priorityAsOf ? { priorityAsOf, priorities } : {}),

@@ -413,7 +413,7 @@ describe("phase 2C: prioritized review course", () => {
 		const indio = manifest.extensions!.indio as Record<string, unknown>;
 		const priorities = indio.priorities as Record<string, Record<string, unknown>>;
 
-		expect(indio.phase).toBe("2C");
+		expect(indio.phase).toBe("2E");
 		expect(indio.priorityAsOf).toBe(AS_OF);
 		expect(priorities["q-relapse"]).toMatchObject({
 			priority: "CRITICAL",
