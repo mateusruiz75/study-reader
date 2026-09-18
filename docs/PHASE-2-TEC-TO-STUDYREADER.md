@@ -206,10 +206,11 @@ Portanto:
   `INDIO-REVISAO-YYYY-MM-DD.study`, mas o `manifest.id` deve ser **estável**
   (ex.: `indio-revisao`), com `manifest.version` incrementado a cada build.
   Um `id` novo por dia fragmentaria o SRS e zeraria o progresso a cada pacote.
-- Ids internos derivam da `dedupeKey`:
-  - aula `L-<dedupeKey>`
-  - questão `Q-<dedupeKey>-<n>`
-  - card `C-<dedupeKey>-<n>`
+- Ids internos derivam da `dedupeKey` (convenção implementada na Fase 2A):
+  - aula `error-<dedupeKey>` (arquivo `content/error-<dedupeKey>.md`)
+  - questão `<dedupeKey>-recovery`
+  - card `<dedupeKey>-card`
+  - módulo: slug da `materia`
 
   O mesmo conceito regenerado mantém os mesmos ids, e o histórico SRS
   sobrevive.
@@ -311,6 +312,36 @@ Critério de aceite:
 
 Fora do escopo do 2A: integração direta com TEC, classificação por IA,
 priorização, gate normativo e deploy automático.
+
+### Implementação (2A)
+
+| Peça | Caminho |
+| --- | --- |
+| Fixture `ErrorEvent` (erro real `adm-podc-q1`) | `examples/phase2a/adm-podc-error.json` |
+| Transformação pura + schema zod | `packages/study-format/scripts/error-event.ts` |
+| CLI | `packages/study-format/scripts/build-error-event.mts` |
+| Testes | `packages/study-format/tests/error-event.test.ts` |
+
+Comando (na raiz do repo):
+
+```
+pnpm study:error-example
+```
+
+Equivalente a:
+
+```
+node packages/study-format/scripts/build-error-event.mts examples/phase2a/adm-podc-error.json examples/INDIO-ERROR-TEST.study
+```
+
+A CLI valida o `ErrorEvent`, gera o pacote, relê o pacote com `readStudy` e
+roda `validateCrossReferences`. Se houver referência quebrada ou path com `\`,
+ela falha antes de gravar.
+
+Determinismo: mesmo input → mesmos ids e mesmo conteúdo de cada arquivo
+interno. O hash do ZIP muda entre execuções porque `buildStudy` grava o
+horário corrente como mtime de cada entrada. É equivalência lógica, não
+byte-a-byte.
 
 ## Sequência das fases
 

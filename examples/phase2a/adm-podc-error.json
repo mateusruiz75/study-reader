@@ -1,0 +1,31 @@
+{
+	"eventId": "studyreader:indio-fiscal-erros:adm-podc-q1:2026-09-18T05:54:40Z",
+	"timestamp": "2026-09-18T05:54:40Z",
+	"source": "studyreader",
+	"banca": null,
+	"ano": null,
+	"materia": "Administração Geral e Pública",
+	"assunto": "Processo Organizacional / PODC / Controle",
+	"questionId": "adm-podc-q1",
+	"enunciado": "Estabelecer padrões, acompanhar o desempenho, identificar desvios e adotar correções corresponde principalmente a qual função administrativa?",
+	"alternativas": [
+		{ "id": "a", "text": "Planejamento" },
+		{ "id": "b", "text": "Organização" },
+		{ "id": "c", "text": "Direção" },
+		{ "id": "d", "text": "Controle" }
+	],
+	"respostaMarcada": ["a"],
+	"respostaCorreta": ["d"],
+	"explicacaoOriginal": "Controle envolve medir resultados, compará-los aos padrões estabelecidos e corrigir desvios.",
+	"recorrencia": 1,
+	"notebookId": null,
+	"raw": {
+		"courseId": "indio-fiscal-erros",
+		"questionId": "adm-podc-q1",
+		"answer": {
+			"correct": false,
+			"selected": ["a"],
+			"answeredAt": "2026-09-18T05:54:40Z"
+		}
+	}
+}

@@ -12,6 +12,7 @@
 		"converter:test": "pnpm --filter @study-reader/mdx-to-study test",
 		"converter:check": "pnpm --filter @study-reader/mdx-to-study check",
 		"study:build": "node packages/mdx-to-study/src/cli.ts",
+		"study:error-example": "node packages/study-format/scripts/build-error-event.mts examples/phase2a/adm-podc-error.json examples/INDIO-ERROR-TEST.study",
 		"plugin:deploy": "bash packages/koreader-plugin/deploy.sh",
 		"plugin:test": "cd packages/koreader-plugin && luajit tests/run.lua",
 		"plugin:check": "cd packages/koreader-plugin && luajit -e \"for _, f in ipairs({'_meta','main','md2xhtml','quiz','review','screens','srs','state','store'}) do assert(loadfile('plugin/studyreader.koplugin/' .. f .. '.lua'), f) end print('lua syntax OK')\"",
